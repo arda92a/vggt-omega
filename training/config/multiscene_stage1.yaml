@@ -86,6 +86,17 @@ optim:
         norm_type: 2
 
 logging:
+  # Epoch averages go to wandb under train/<metric>, with the epoch as the x-axis.
+  # `wandb login` once on the machine, or export WANDB_API_KEY.
+  # A restarted run with the same name continues the same chart.
+  wandb_writer:
+    _target_: train_utils.wandb_logger.WandbLogger
+    enabled: true
+    project: vggt-omega-multiscene
+    name: ${exp_name}
+    entity: null
+    mode: online
+    dir: logs/${exp_name}/wandb
   scalar_keys_to_log:
     train:
       keys_to_log:

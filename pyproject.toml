@@ -37,6 +37,7 @@ train = [
     "fvcore",
     "tensorboard",
     "wcmatch",
+    "wandb",
 ]
 curation = [
     "catboost",

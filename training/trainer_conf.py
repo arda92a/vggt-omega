@@ -74,3 +74,4 @@ class TrainerLoggingConf:
     log_level_secondary: str = "WARNING"
     scalar_keys_to_log: Optional[Dict[str, Any]] = None
     all_ranks: bool = False
+    wandb_writer: Any = None

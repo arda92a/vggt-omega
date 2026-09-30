@@ -659,6 +659,7 @@ class Trainer:
 
         self.est_epoch_time["train"] = batch_time.avg * limit_train_batches
         self._log_timers("train")
+        self._log_epoch(scalar_meters)
 
         logging.info(f"Train Epoch Finished: [{self.epoch}]")
 
@@ -768,6 +769,26 @@ class Trainer:
 
         logging.info(f"Estimated time remaining: {human_readable_time(time_remaining)}")
 
+    def _log_epoch(self, scalar_meters):
+        """Write one point per finished epoch. The x-axis on wandb is the epoch index."""
+        if self.rank != 0:
+            return
+        metrics = {}
+        for name, meter in scalar_meters.items():
+            key = name[len("train_") :] if name.startswith("train_") else name
+            metrics[f"train/{key}"] = meter.avg
+        learning_rates = [
+            group["lr"]
+            for optim in self.optims
+            for group in optim.optimizer.param_groups
+        ]
+        if learning_rates:
+            metrics["train/lr"] = sum(learning_rates) / len(learning_rates)
+        summary = ", ".join(f"{key}={value:.4f}" for key, value in metrics.items())
+        logging.info(f"Epoch [{self.epoch}] averages: {summary}")
+        if self.wandb_writer is not None:
+            self.wandb_writer.log_epoch(metrics, int(self.epoch))
+
     def _setup_components(self):
         logging.info("Setting up components: Model, loss, optim, meters etc.")
 
@@ -775,6 +796,11 @@ class Trainer:
         self.steps = {"train": 0}
 
         self.tb_writer = instantiate(self.logging_conf.tensorboard_writer)
+        self.wandb_writer = (
+            instantiate(self.logging_conf.wandb_writer)
+            if self.logging_conf.wandb_writer is not None
+            else None
+        )
         self.model = instantiate(self.model_conf, _recursive_=False)
 
 
