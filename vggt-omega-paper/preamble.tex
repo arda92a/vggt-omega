@@ -1,0 +1,59 @@
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{fancyvrb}
+\usepackage[flushmargin]{footmisc}
+\usepackage{gensymb}
+\usepackage{graphicx}
+\usepackage{lipsum}
+\usepackage{multirow}
+\usepackage{pifont}
+\usepackage{tcolorbox}
+\usepackage{wrapfig}
+\usepackage{xcolor}
+\usepackage{xspace}
+
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+\tcbuselibrary{listings, breakable}
+
+\DeclareMathOperator{\reshape}{reshape}
+
+\newcommand{\method}{VGGT-$\Omega$\xspace}
+\newcommand{\methodbf}{\textbf{VGGT-}\(\boldsymbol{\Omega}\)\xspace}
+\newcommand{\methodit}{\textit{VGGT-}\textit{$\varOmega$}\xspace}
+
+\definecolor{promptcolor}{RGB}{20, 120, 20}
+\definecolor{linegreen}{RGB}{20, 140, 50}
+
+\newcommand{\duster}{DUSt3R\xspace}
+\newcommand{\master}{MASt3R\xspace}
+\newcommand{\smallnabla}{\scalebox{0.75}{$\nabla$}}
+
+\newcommand{\tok}{\mathrm{t}}
+\newcommand{\davgvis}{\ensuremath{\delta_\text{avg}^\text{vis}}\xspace}
+\newcommand{\by}{\boldsymbol{y}}
+\newcommand{\bx}{\boldsymbol{x}}
+\newcommand{\bt}{\boldsymbol{t}}
+\newcommand{\bq}{\boldsymbol{q}}
+\newcommand{\bz}{\boldsymbol{z}}
+\newcommand{\bp}{\boldsymbol{p}}
+\newcommand{\bg}{\boldsymbol{g}}
+\newcommand{\bbf}{\boldsymbol{f}}
+\newcommand{\R}{\mathbb{R}}
+
+\newcommand{\tickmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+\makeatletter
+\renewcommand{\paragraph}{%
+    \@startsection{paragraph}{4}%
+    {\z@}{-0.45em}{-0.45em}%
+    {\normalfont\normalsize\bfseries}%
+}
+\makeatother
+

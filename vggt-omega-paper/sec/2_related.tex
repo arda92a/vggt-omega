@@ -1,0 +1,52 @@
+\section{Related work}%
+\label{sec:related}
+
+\paragraph{3D Reconstruction.}
+
+There is a long and rich history of research on 3D reconstruction, beginning with seminal works that established the theory of multi-view geometry~\cite{faugeras90motion, oliensis00a-critique, hartley04multiple, ozyesil17a-survey}.
+Follow-up work led to major practical advances, including robust SfM systems such as COLMAP~\cite{schonberger16structure-from-motion} and other pipelines~\cite{snavely06photo, agarwal11building, frahm10building, liu24robust, dellaert12factor}.
+In this paper, we focus on \textit{feed-forward reconstruction models}, \ie, neural networks that infer scene geometry and camera poses directly from one or more images.
+While recent SfM pipelines increasingly include learnable components such as keypoint detectors~\cite{yi16lift:,daniel18superpoint:,dusmanu19d2-net:,tyszkiewicz20disk:} and feature matchers~\cite{sarlin20superglue:,chen21learning,shi22clustergnn:,lindenberger23lightglue:}, our work is most closely related to end-to-end differentiable SfM frameworks that learn geometry estimation directly~\cite{zhou17unsupervised, ummenhofer17demon:, tang19ba-net:, wei20deepsfm:, wang21deep, teed20deepv2d:, teed21droid-slam:, brachmann24scene, wang23posediffusion:, wang24vggsfm:}.
+While these works demonstrate that end-to-end learning is possible in SfM, they still \emph{combine} elements of classical SfM pipelines.
+\duster~\cite{wang24dust3r:} and its follow-up \master~\cite{duisterhof25mast3r-sfm:} estimated both scene geometry and camera parameters (extrinsics and intrinsics) directly from images.
+However, similar to stereo approaches~\cite{niemeyer20differentiable, fu22geo-neus:, wei21nerfingmvs:, yariv20multiview, yao18mvsnet:, gu20cascade, ma22multiview, peng22rethinking, zhang23geomvsnet:}, the neural networks in \duster and \master operate only on image pairs and still require post-optimization to process additional views.
+A key improvement came from methods that process multiple images jointly, removing the need for optimization across views, including~\cite{wang24spann3r:, wang25continuous, tang25mv-dust3r:, wu25point3r:, zhang25flare:, yang25fast3r:, elflein25light3r-sfm:}.
+Among these, VGGT~\cite{wang25vggt} is a representative approach that first surpassed post-optimization methods (\eg, using bundle adjustment) while relying solely on feed-forward inference, prompting many follow-up works~\cite{wang25p3, keetha26mapanything:, xiao25spatialtrackerv2:, chen25ttt3r:, deng25vggt-long:, lan26stream3r:, maggio25vggt-slam:, li25wint3r:, huang25longsplat:, szymanowicz26lagernvs, yuan25test3r:, deng26sail-recon:, jiang25anysplat:, cabon25must3r:, liu25plana3r:, li25rig3r:, zang26robust, chen26hd-vggt:, liu26streamcachevggt:, zhuo26streaming, jung26more:, mahdi25evict3r:, wang26lidar-vggt:, qi25fupad:, mazur264d-primitive-mache:}.
+Several works improve the computational scalability of VGGT-style models through token merging, sparse attention, or descriptor-based aggregation, making many-view feed-forward reconstruction more efficient~\cite{shen26fastvggt:, wang25faster, mahdi25evict3r:}.
+Other works address the quadratic cost of global self-attention by using stateful, bounded scene representations with a linear update cost.
+Examples include methods that use test-time-training layers~\cite{chen26ttt3r:, jin26zipmap:, zhang26loger:}.
+Others~\cite{zhuo26streaming, lan26stream3r:, chen26geometric, taher25kv-tracker:} process frames causally while maintaining a persistent geometric state by caching tokens, key-value pairs, local windows, or maps.
+Some have used VGGT to reconstruct scenes locally, fusing results by means of alignment, localization, or SLAM algorithms~\cite{deng25vggt-long:, maggio25vggt-slam:, deng26sail-recon:, wang25amb3r:}.
+
+Other works have extended VGGT-like models to take additional geometric information as input (\eg, cameras~\cite{keetha26mapanything:}), add sensors (\eg, LiDAR~\cite{wang26lidar-vggt:}), or model camera rigs~\cite{li25rig3r:}.
+Other extensions predict normals~\cite{fang26dens3r:} or use mixture-of-experts designs~\cite{gao25more:, wang26moe3d:}.
+PI3~\cite{wang25p3} removes the reliance on a fixed reference view, while Depth Anything 3 (DA3)~\cite{lin25depth} adopts vanilla DINO as its backbone, with both supporting dynamic scenes.
+Some studies have investigated what these models learn, probing for correspondences, epipolar structure, and connections to 3D shape perception in humans~\cite{bratulic25on-geometric, bonnen26human-level}.
+SelfEvo~\cite{huang26self-improving} explored a self-distillation scheme using spatiotemporal context asymmetry. 
+Beyond reconstruction itself, the features learned by feed-forward reconstruction models have also been applied as geometry-aware representations for other tasks.
+This includes video generation and novel view synthesis~\cite{jiang25anysplat:, huang26gen3r:, jang26repurposing, liu26camgeo:, szymanowicz26lagernvs}, vision-language models~\cite{zeng25janusvln:, qian26xembodied:, zhang26spatialstack:, zhang26make, zheng25learning, wang26let-geometry, yang26cambrian-s:, zhao25spacemind:, wu26mvggt:, lee253d-aware}, vision-language-action models~\cite{li25spatial, abouzeid25geoaware-vla:, vuong25improving, rao26augvla-3d:}, and perception tasks such as detection, segmentation, matching, occupancy prediction, and place recognition~\cite{cao26vggt-det:, gao26vggt-segmentor:, yang25dense, zhou26generalizing, xu26vggt-mpr:, deng25unipr-3d:}.
+
+Monocular dynamic 3D reconstruction, or 4D reconstruction, aims to recover scene geometry that changes over time.
+This line of research also has a long history, with early work by Bregler et al.~\cite{bregler00recovering} and Torresani et al.~\cite{torresani08nonrigid}.
+Among recent contributions, MegaSaM~\cite{li25megasam:} has been particularly influential, combining feed-forward depth prediction with optimization-based non-rigid reconstruction.
+ViPE~\cite{huang25vipe:} further builds on this direction.
+Several works have explored feed-forward 4D reconstruction with reduced optimization.
+MonST3R~\cite{zhang24monst3r:} and D$^2$USt3R~\cite{han25d2ust3r:} extend \duster to handle dynamic 3D content.
+Align3R~\cite{lu25align3r:} builds on \duster to infer cameras and align monocular depth predictions over time, though it still relies on optimization beyond two views.
+CUT3R~\cite{wang25continuous} and Point3R~\cite{wu25point3r:} support incremental reconstruction alongside dynamic scenes.
+Geo4D~\cite{jiang25geo4d} fine-tunes a video generator to recover 4D geometry.
+PI3~\cite{wang25p3} and DA3~\cite{lin25depth} adopt VGGT-style models and train them with dynamic data, while PAGE-4D~\cite{zhou25page-4d:} adapts VGGT through a module that separates static and moving regions.
+Human3R focuses on human-scene reconstruction~\cite{chen25human3r:}.
+SpatialTracker~\cite{xiao25spatialtrackerv2:}, St4RTrack~\cite{feng25st4rtrack:}, DPM~\cite{sucar25dynamic}, V-DPM~\cite{sucar26v-dpm}, Uni4D~\cite{yao25uni4d:}, Any4D~\cite{karhade2025any4d}, and related methods unify dynamic reconstruction and point tracking.
+D4RT~\cite{zhang25efficiently} introduces a unified feed-forward transformer that reconstructs dynamic scenes by querying point-level 4D scene information.
+
+
+\paragraph{Registers in Vision Transformers (ViTs).}
+
+Recent works~\cite{darcet24vision, marouani26revisiting} have found that a small number of tokens in ViTs encode not only local patch information but also global information.
+These outliers have high norms and disrupt the spatial coherence of the patch features.
+This, in turn, has motivated the use of register tokens, which are separate from image tokens and help preserve coherence among patch representations. 
+Further studies have investigated the causes of this phenomenon and the interactions between register and image tokens~\cite{jiang25vision, shi26vision, lappe25register, marouani26revisiting}.
+Here, we add register tokens to each input image frame and use them to aggregate and exchange global information across images.
+In this way, our registers carry information about the sequence as a whole.
+Rather than discarding them as is often done in prior work, we show that they are useful in downstream applications.

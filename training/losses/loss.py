@@ -6,12 +6,14 @@
 
 import torch
 
+from losses.base_loss.affinity import compute_affinity_loss
 from losses.base_loss.camera import PairwisePoseLoss, compute_camera_loss
 from losses.base_loss.consistency import compute_geometric_consistency_loss
 from losses.base_loss.depth import compute_depth_loss
 from losses.base_loss.point import compute_point_loss
 from losses.gt_normalization import normalize_gt_batch
 from losses.normalization import normalize_predictions_differentiable
+from losses.per_scene import mean_over_scenes
 
 
 def _extract_weight(config):
@@ -40,6 +42,7 @@ class MultitaskLoss(torch.nn.Module):
         depth=None,
         point=None,
         track=None,
+        affinity=None,
         normalize_predictions=False,
         normalize_gt=None,
         rel_to_first_cam=False,
@@ -50,6 +53,7 @@ class MultitaskLoss(torch.nn.Module):
         self.depth, self.depth_weight = _extract_weight(depth)
         self.point, self.point_weight = _extract_weight(point)
         self.track, self.track_weight = _extract_weight(track)
+        self.affinity, self.affinity_weight = _extract_weight(affinity)
         self.normalize_predictions = normalize_predictions
         self.normalize_gt = normalize_gt
         self.rel_to_first_cam = rel_to_first_cam
@@ -73,6 +77,15 @@ class MultitaskLoss(torch.nn.Module):
     def forward(self, predictions, batch, schedule_progress) -> dict:
         """`schedule_progress` is the fraction of training completed, in [0, 1). It drives the
         intrinsics warmup, so it must be the same value the LR schedulers see."""
+        per_scene = "scene_id" in batch
+        if per_scene and self.normalize_gt:
+            raise ValueError(
+                "normalize_gt cannot run on a mixed-scene batch. Each scene is already in its own frame."
+            )
+        if per_scene and self.point is not None:
+            raise ValueError("Point loss is not split by scene yet. Leave loss.point unset for multi-scene training.")
+        if per_scene and self.track is not None:
+            raise ValueError("Track loss is not split by scene yet. Leave loss.track unset for multi-scene training.")
         if self.normalize_gt:
             batch = normalize_gt_batch(batch, normalization_type=self.normalize_gt)
 
@@ -93,20 +106,35 @@ class MultitaskLoss(torch.nn.Module):
                     intrinsics_warmup_ratio=self.intrinsics_warmup_ratio,
                 )
 
-        if "pose_enc_list" in predictions:
-            camera_loss_dict = compute_camera_loss(
-                predictions,
-                batch,
+        if self.camera is not None and "pose_enc_list" in predictions:
+            camera_kwargs = dict(
                 pairwise_loss_fn=self.pairwise_loss,
                 **self.camera,
             )
+            if per_scene:
+                camera_loss_dict = mean_over_scenes(
+                    lambda pred, sub: compute_camera_loss(pred, sub, **camera_kwargs),
+                    predictions,
+                    batch,
+                    batch["scene_id"],
+                )
+            else:
+                camera_loss_dict = compute_camera_loss(predictions, batch, **camera_kwargs)
             total_loss = (
                 total_loss + camera_loss_dict["loss_camera"] * self.camera_weight
             )
             loss_dict.update(camera_loss_dict)
 
-        if "depth" in predictions:
-            depth_loss_dict = compute_depth_loss(predictions, batch, **self.depth)
+        if self.depth is not None and "depth" in predictions:
+            if per_scene:
+                depth_loss_dict = mean_over_scenes(
+                    lambda pred, sub: compute_depth_loss(pred, sub, **self.depth),
+                    predictions,
+                    batch,
+                    batch["scene_id"],
+                )
+            else:
+                depth_loss_dict = compute_depth_loss(predictions, batch, **self.depth)
             total_loss = total_loss + depth_loss_dict["loss_depth"] * self.depth_weight
             loss_dict.update(depth_loss_dict)
 
@@ -138,6 +166,11 @@ class MultitaskLoss(torch.nn.Module):
                 + consistency_loss_dict["loss_consistency"] * self.track_weight
             )
             loss_dict.update(consistency_loss_dict)
+
+        if self.affinity is not None:
+            affinity_loss_dict = compute_affinity_loss(predictions, batch, **self.affinity)
+            total_loss = total_loss + affinity_loss_dict["loss_affinity"] * self.affinity_weight
+            loss_dict.update(affinity_loss_dict)
 
         loss_dict["loss_objective"] = total_loss
         return loss_dict

@@ -1,0 +1,68 @@
+{
+  \vspace{1em}
+  \color{linegreen}
+  \hrule
+  \vspace{1pt}
+  \hrule
+  \vspace{0.5em}
+}
+
+\begingroup
+
+\color{promptcolor} \ttfamily \footnotesize \raggedright
+\noindent {\normalfont\bfseries Language Alignment Prompt}
+
+\vspace{0.25em}
+\noindent
+These images show the same scene from multiple viewpoints.\\
+Describe the full scene as one coherent scene, not as separate images.\par\vspace{0.5em}\noindent
+Use the following format:\\
+Scene: \textless{}scene category or environment\textgreater{}.\\
+Content: \textless{}main objects and coarse spatial arrangement\textgreater{}.\\
+Appearance: \textless{}stable visual attributes such as material, color, or style\textgreater{}.\par\vspace{0.5em}\noindent
+Write one short sentence for each field.\\
+Mention information that is consistent across multiple views, even if it is not visible in every view.\\
+Focus on shared scene content, major objects, coarse layout, and stable appearance.\\
+Mention dynamic objects only if they are prominent and identifiable in multiple views.\\
+Do not describe motion, actions, or frame-specific changes.\\
+Do not describe each image separately.\\
+Do not mention camera motion, viewpoint order, image quality, blur, exposure, lighting artifacts, or uncertainty.\\
+Keep the description concise, factual, and semantically dense.
+
+\vspace{0.7em}
+{\color{linegreen}\hrule height 0.6pt}
+\vspace{0.6em}
+\noindent {\normalfont\bfseries Representative Descriptions}
+\vspace{-0.6em}
+\newcommand{\exampleDashedSep}{\par\vspace{0.4em}\noindent{\color{linegreen}\leaders\hbox{\rule{0.8em}{0.4pt}\hspace{0.35em}}\hfill\kern0pt}\par\vspace{0.4em}}
+
+\exampleDashedSep
+\noindent Scene: A dimly lit room with a red hue, featuring a door, a window, and a wall with a patterned texture.\\
+Content: The room contains a closed door on the left, a window on the right, and a wall with a textured pattern.\\
+Appearance: The walls have a floral or damask pattern, the floor is dark, and the overall lighting is red.
+
+\exampleDashedSep
+\noindent Scene: Snowy forest landscape with a winding road.\\
+Content: A snow-covered forest with tall pine trees, a winding road, and a steep slope.\\
+Appearance: The scene has a high-contrast look, with dark clouds above and bright white snow covering the ground and trees.
+
+\exampleDashedSep
+\noindent Scene: Outdoor public area.\\
+Content: A dark green plastic picnic table with a hexagonal top and black legs, accompanied by matching benches, situated on a paved surface.\\
+Appearance: The table and benches are made of uniform dark green plastic with a matte finish, and the ground is composed of light gray square tiles.
+
+\exampleDashedSep
+\noindent Scene: Urban plaza with modern architecture.\\
+Content: A central fountain with a large circular sculpture, surrounded by paved walkways and buildings.\\
+Appearance: The fountain has a metallic, silver-colored structure with a dark base, and the surrounding area features light gray stone tiles and modern buildings with glass and concrete facades.
+
+\endgroup
+
+{
+  \vspace{0.5em}
+  \color{linegreen}
+  \hrule
+  \vspace{1pt}
+  \hrule
+  \vspace{1em}
+}

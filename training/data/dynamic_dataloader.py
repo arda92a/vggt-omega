@@ -17,6 +17,23 @@ from .sampler_configs import FRAME_COUNT_SAMPLING_WEIGHTS, FRAME_COUNT_TO_BATCH_
 from .worker_fn import get_worker_init_fn
 
 
+def _resolve_collate(collate_fn: Optional[Callable], mixed_scene: Optional[dict]) -> Optional[Callable]:
+    """Use the mixed-scene collate when the config asks for more than one scene."""
+    if mixed_scene is None:
+        return collate_fn
+    num_scenes = int(mixed_scene.get("num_scenes", 1))
+    if num_scenes <= 1:
+        return collate_fn
+    if collate_fn is not None:
+        raise ValueError("data.train.collate_fn and data.train.mixed_scene cannot both be set")
+    from .mixed_scene import MixedSceneCollate
+
+    return MixedSceneCollate(
+        num_scenes=num_scenes,
+        min_frames=int(mixed_scene.get("min_frames", 3)),
+    )
+
+
 DEFAULT_DISCRETE_ASPECT_RATIOS = (
     5.0 / 9.0,
     10.0 / 16.0,
@@ -59,10 +76,11 @@ class DynamicTorchDataset:
         seed: int = 42,
         per_gpu_batch_scale: float = 1.0,
         use_spawn: bool = False,
+        mixed_scene: Optional[dict] = None,
     ) -> None:
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.collate_fn = collate_fn
+        self.collate_fn = _resolve_collate(collate_fn, mixed_scene)
         self.worker_init_fn = worker_init_fn
         self.seed = seed
         self.use_spawn = use_spawn and num_workers > 0

@@ -1,0 +1,143 @@
+\clearpage
+\maketitlesupplementary
+\appendix
+
+In this Supplement, we provide additional implementation details in \cref{sec:impl}, a discussion of common data issues in \cref{sec:data_quality}, and a discussion of limitations in \cref{sec:limitation}.
+
+\section{Additional Details}%
+\label{sec:impl}
+
+In this section, we detail the training setup and architecture (\cref{sec:impl-training}), the construction of positive and negative pairs (\cref{sec:impl-pairs}), the VLM prompt (\cref{sec:impl-vlm-prompt}), the annotation filtering criteria (\cref{sec:impl-filtering}), and the language alignment procedure (\cref{sec:impl-language-alignment}).
+
+\subsection{Training and Architecture}%
+\label{sec:impl-training}
+
+To train our model, we set the loss weights in \cref{eq:training-loss} to $\lambda_{\text{cam}} = 5.0$, $\lambda_{\text{depth}} = 1.0$, $\lambda_{\text{point}} = 0.5$, and $\lambda_{\text{match}} = 0.1$.
+For each scene, following~\cite{wang24dust3r:, wang25vggt}, we normalize the ground truth to a unit space.
+Concretely, we first transform all quantities into the first camera's coordinate frame and compute the average distance of all 3D points to the origin; we then scale the depth maps and translation vectors by this value.
+As in~\cite{wang25vggt}, this normalization is applied only to the ground truth and not to the predictions.
+To stabilize training, we apply gradient-norm clipping with a threshold of $1.0$ and use QKNorm inside the attention layers.
+At each iteration, we randomly sample the number of input frames from the range $[1, 24]$ and correspondingly set the batch size to saturate GPU memory.
+Each frame is independently masked by a rectangle whose height and width are uniformly sampled from $[32, 128]$ pixels, with a probability of $0.05$.
+Pixels inside the masked region are set to black, and the corresponding depth values are marked as invalid.
+For color jittering, we use PyTorch's implementation with brightness $0.5$, contrast $0.5$, saturation $0.5$, and hue $0.1$.
+During self-supervised training, the weights of the teacher model are updated using an exponential moving average with a decay of $0.999$.
+Our camera head follows the implementation in~\cite{wang25vggt}, using a ReLU activation for the focal length and no activation for the quaternion and translation parameters.
+For datasets with temporally ordered sequences (\eg, videos), we sample frames from a local temporal window rather than based on covisibility.
+This can produce particularly challenging reconstruction subsets in which images are semantically related but share little or no visual overlap.
+We found that these samples improve the model's generalization.
+
+\subsection{Constructing Positive and Negative Pairs}%
+\label{sec:impl-pairs}
+
+We expand on the matching loss introduced in the main paper (\cref{sec:training-losses}) by detailing how we construct the positive and negative token pairs.
+
+Given per-pixel 3D points obtained by unprojecting the depth maps, we first sample valid pixels in the query frame and assign each sampled pixel to a query patch.
+Using the known camera intrinsics and extrinsics, we then project the corresponding 3D points into all other frames and retain only those projections that (i) fall inside the image and (ii) are depth-consistent with the target-frame depth maps (within a small relative tolerance of $1\%$ and excluding a narrow image boundary of 4 pixels).
+
+For each target frame, we count how many 3D points from each query patch land in each target patch.
+This yields, for every query patch, a soft correspondence map over target patches in the form of projection overlap ratios.
+We select query patches that have sufficient valid projections across views and randomly sample up to a fixed number of them, with sampling probabilities proportional to their total number of correspondences.
+For each selected query patch, all target patches with $>$10\% overlap form positive token pairs.
+
+Because some sequences are dynamic, failing the positive-pair criteria does not automatically define a valid negative.
+Instead, we construct negative pairs by randomly sampling patches as query and target candidates, and then enforcing two constraints:
+(i) a geometric constraint, requiring the candidate target patch center to lie sufficiently far from the epipolar line induced by the query patch (\ie, to have a large epipolar/Sampson distance), and
+(ii) an appearance constraint, requiring a sufficiently large \(\ell_2\) distance between the mean RGB values of the two patches.
+Patches that satisfy both constraints are treated as negatives.
+We then subsample these negatives to obtain a balanced set of positive and negative patch pairs for supervising the matching loss on the last-layer tokens.
+
+\subsection{VLM Prompt}%
+\label{sec:impl-vlm-prompt}
+
+We use a VLM to discard videos not suitable for multi-view geometry.
+We prompt the VLM as follows:
+
+\input{sec/prompt.tex}
+
+\subsection{Annotation Filtering Criteria}%
+\label{sec:impl-filtering}
+
+To train the ensemble classifier (XGBoost, Random Forest, and CatBoost) described in \cref{sec:annotation-pipeline}, we extract several geometric features from each reconstruction.
+These features are designed to detect common failure modes such as collinear motion degeneracies, inconsistent scale, and noisy camera trajectories.
+Below, we provide definitions for the most important features implemented in our pipeline.
+
+\paragraph{Trajectory Smoothness.}
+
+We quantify the smoothness of the estimated camera trajectory using the acceleration of the translation vectors $\mathbf{t}$.
+The smoothness score $S_\text{trans}$ is calculated as the mean squared magnitude of the acceleration:
+\begin{equation}
+    S_\text{trans} = \frac{1}{N-2} \sum_{i=1}^{N-2} \| \mathbf{t}_{i+1} - 2\mathbf{t}_i + \mathbf{t}_{i-1} \|^2
+\end{equation}
+We compute a similar metric $S_\text{rot}$ for rotations using the second order difference of the rotation vectors.
+High values in $S_\text{trans}$ or $S_\text{rot}$ indicate jittery trajectories, often associated with poor SfM convergence.
+
+\paragraph{Parallax Angle Analysis.}
+
+To ensure sufficient baseline for multi-view stereo, we analyze the parallax angles of the reconstructed sparse point cloud.
+For a subset of sparse points $\mathcal{P}$, we identify the set of cameras $\mathcal{C}_p$ visible to point $p \in \mathcal{P}$.
+We compute the maximum angle subtended by any pair of cameras $c_j, c_k \in \mathcal{C}_p$ at point $p$.
+The final feature is the {median} of these maximum angles across all sampled points.
+Low median parallax indicates degenerate rotation-only motion or extreme distance.
+
+\paragraph{Point Cloud PCA Shape (Linearity \& Planarity).}
+
+To detect geometric degeneracies such as ``fly-by'' straight-line reconstructions (which result in cylindrical ambiguity), we perform Principal Component Analysis (PCA) on the normalized point cloud coordinates.
+Let $v_1 \ge v_2 \ge v_3$ be the eigenvalues of the point cloud covariance matrix.
+We define \emph{Linearity} as $(v_1 - v_2) / v_1$, \emph{Planarity} as $(v_2 - v_3) / v_1$, and \emph{Scattering} as $v_3 / v_1$.
+Reconstructions with excessively high linearity are flagged as linear degeneracies and are typically discarded by the classifier.
+
+\paragraph{Depth Map Completeness.}
+
+This metric evaluates the density of the dense reconstruction stage.
+For each frame, we calculate the percentage of pixels containing valid, finite depth values relative to the total image resolution.
+The final feature is the average completeness across all frames.
+Extremely low values typically indicate failure in the Multi-View Stereo stage, often caused by textureless surfaces, high specularities, or bad cameras.
+
+\paragraph{Point Cloud Noise Level.}
+
+We estimate the signal-to-noise ratio using statistical outlier detection.
+For every point, we compute the average distance to its nearest neighbors.
+Points are classified as noise if this distance exceeds the global average by more than two standard deviations.
+The feature is the percentage of points classified as noise, which allows us to detect reconstructions plagued by floating artifacts and outliers.
+
+Note that this pipeline can provide depth values only for rigid pixels, so the metrics above assume that dynamic pixels are already masked out.
+We assume the model can learn to estimate depth for dynamic pixels from synthetic data.
+
+\subsection{Language Alignment}%
+\label{sec:impl-language-alignment}
+
+In \cref{sec:applications}, we use a VLM to produce a sequence-level language embedding for each training sequence.
+Here, we provide the exact VLM prompt and representative generated descriptions.
+The hidden states of the generated text tokens are mean-pooled and projected to form the language embedding.
+The prompt and image tokens are excluded from this pooling.
+We use at most \(128\) newly generated tokens and keep the VLM fixed.
+The \method side is optimized during alignment fine-tuning, as described in \cref{sec:applications}.
+The images are provided as an unordered collection, both to the VLM and to our model.
+
+\input{sec/language_alignment_prompt.tex}
+\input{sec/5_data_quality}
+
+\section{Limitations}%
+\label{sec:limitation}
+
+\paragraph{Failure Cases.}
+
+Despite the generally strong performance of \method, we observe specific scenarios in which the model struggles. 
+For example, the model's performance drops significantly in the presence of strong motion blur. 
+Meanwhile, reconstruction quality often degrades if the field of view changes abruptly (e.g., shifting from $10^\circ$ to $160^\circ$ in a few seconds) or the camera is highly distorted. 
+Additionally, because the model was exposed to some noisy data (\eg, ScanNet++) during the early stage of training, its predictions are sometimes unstable in the cases like office scenes with many monitors. 
+These limitations are primarily attributable to the distribution of our training data, and we hope to alleviate them in future work by incorporating more diverse and challenging sequences.
+
+
+
+\paragraph{Masked Sensitive Content.}
+
+Due to privacy and licensing constraints, some portions of the training data, such as human faces and trademarks, are masked or blurred.
+As a result, the model may rarely produce unexpected artifacts or unstable predictions in these regions. For example, we observed that the predicted depth for a person wearing black clothing can occasionally become less smooth.
+These artifacts can lead to visually distorted or qualitatively unappealing outputs.
+
+
+
+
+

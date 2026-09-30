@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from vggt_omega.models.aggregator import Aggregator
 from vggt_omega.models.heads import CameraHead, DenseHead, TextAlignmentHead
+from vggt_omega.models.multiscene import MultiScene, predict_pose_by_scene, select_camera_groups
 
 
 class VGGTOmega(nn.Module):
@@ -26,6 +27,7 @@ class VGGTOmega(nn.Module):
         enable_alignment: bool = False,
         use_checkpoint: bool = False,
         autocast: bool = True,
+        multiscene: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -35,8 +37,18 @@ class VGGTOmega(nn.Module):
         self.camera_head = CameraHead(dim_in=2 * embed_dim) if enable_camera else None
         self.dense_head = DenseHead(dim_in=2 * embed_dim, patch_size=patch_size) if enable_depth else None
         self.text_alignment_head = TextAlignmentHead(dim_in=2 * embed_dim) if enable_alignment else None
+        self.multiscene = _build_multiscene(multiscene, dim=2 * embed_dim)
+        self.isolate_camera = False
+        self.camera_groups = "gt"
+        if self.multiscene is not None:
+            self.isolate_camera = bool(multiscene.get("isolate_camera", True))
+            self.camera_groups = str(multiscene.get("camera_groups", "gt"))
+            if self.camera_groups not in ("gt", "predicted"):
+                raise ValueError(
+                    f"model.multiscene.camera_groups must be 'gt' or 'predicted', got {self.camera_groups!r}"
+                )
 
-    def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, images: torch.Tensor, scene_id: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         if len(images.shape) == 4:
             images = images.unsqueeze(0)
 
@@ -52,15 +64,36 @@ class VGGTOmega(nn.Module):
         if final_tokens is None:
             raise ValueError("Aggregator did not cache the final layer, which VGGTOmega needs.")
 
-        predictions = {
-            "camera_and_register_tokens": final_tokens[:, :, :patch_token_start].contiguous(),
-        }
+        predictions = {}
+        if self.multiscene is not None:
+            final_tokens, scene_predictions = self.multiscene(
+                final_tokens,
+                patch_token_start=patch_token_start,
+                hard_mask=not self.training,
+            )
+            aggregated_tokens_list[-1] = final_tokens
+            predictions.update(scene_predictions)
+
+        predictions["camera_and_register_tokens"] = final_tokens[:, :, :patch_token_start].contiguous()
         with torch.autocast(device_type="cuda", enabled=False):
             if self.camera_head is not None:
-                predictions["pose_enc"] = self.camera_head(
-                    aggregated_tokens_list,
-                    patch_token_start=patch_token_start,
-                )
+                if self.isolate_camera:
+                    group_id = select_camera_groups(
+                        predictions["group_id"],
+                        scene_id,
+                        self.camera_groups,
+                    )
+                    predictions["pose_enc"] = predict_pose_by_scene(
+                        self.camera_head,
+                        final_tokens,
+                        patch_token_start,
+                        group_id,
+                    )
+                else:
+                    predictions["pose_enc"] = self.camera_head(
+                        aggregated_tokens_list,
+                        patch_token_start=patch_token_start,
+                    )
 
             if self.dense_head is not None:
                 depth, depth_conf = self.dense_head(
@@ -82,6 +115,21 @@ class VGGTOmega(nn.Module):
         if not self.training:
             predictions["images"] = images
         return predictions
+
+
+def _build_multiscene(config: dict | None, dim: int) -> MultiScene | None:
+    """Build the multi-scene block only when the config asks for it.
+
+    Leaving `multiscene` unset keeps the released checkpoint path unchanged.
+    """
+    if config is None or not bool(config.get("enabled", False)):
+        return None
+    return MultiScene(
+        dim=dim,
+        num_heads=int(config.get("num_heads", 16)),
+        threshold=float(config.get("threshold", 0.5)),
+        bias_scale=float(config.get("bias_scale", 1.0)),
+    )
 
 
 def _warn_if_rope_not_max(aggregator: nn.Module) -> None:

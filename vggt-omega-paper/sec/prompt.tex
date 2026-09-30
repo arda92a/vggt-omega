@@ -1,0 +1,74 @@
+{
+  \vspace{1em}
+  \color{linegreen}
+  \hrule
+  \vspace{1pt}
+  \hrule
+  \vspace{0.5em}
+}
+
+\begingroup
+
+\color{promptcolor} \ttfamily \footnotesize \raggedright
+\noindent
+"You are an expert in computer vision, photogrammetry, and Multi-View Geometry (MVG)."\\
+"Analyze the video clip to determine if it is suitable for high-quality 3D reconstruction."\\
+"You must categorize the video and extract scene metadata based on the strict criteria below."
+
+\vspace{0.5em}
+\noindent {STEP 1: CHECK FOR HARD REJECTION FACTORS} \\
+``Assess the following. If ANY are present, the Classification is {`REJECT\_HARD'}'':
+\begin{enumerate}[noitemsep, topsep=0pt, leftmargin=*]
+    \item Discontinuities \& Editing: Does the video contain cuts, dissolves, wipes, fades, or montage editing? (Must be a single continuous shot).
+    \item Non-Physical/2D Content: Is this a screen recording, a slideshow of static images, animation, or a cartoon? (Must be real-world footage).
+    \item Extreme Visual Failure: Severe motion blur (edges lost), severe rolling shutter (wobble/jello effect), or corruption/glitching.
+    \item Major Obstructions: Are there heavy overlays (large text/UI), watermarks, or physical obstructions like a finger covering the lens?
+    \item Non-Pinhole Projections: Is the footage 360$^{\circ}$ equirectangular or heavily distorted fisheye without calibration?
+\end{enumerate}
+
+\vspace{0.5em}
+\noindent {STEP 2: CHECK FOR GEOMETRIC \& TEXTURAL SUITABILITY} \\
+"If the video passes Step 1, assess for reconstruction quality. If ANY are present, the Classification is {`REJECT\_SOFT'}:"
+\begin{enumerate}[noitemsep, topsep=0pt, leftmargin=*]
+    \item Insufficient Parallax: Is the camera stationary? Does it only rotate (pan/tilt) or zoom without physical translation? (Translation is required for depth).
+    \item Texture Issues: Does the scene lack non-repetitive texture? (e.g., blank white walls, clear blue sky only, dark shadows, or highly repetitive patterns like grid tiles).
+    \item Specularities \& Transparencies: Are the dominant features reflective (mirrors, water, glass) or transparent? (These create `ghost' geometry).
+    \item Focus \& DOF Issues: Is there severe focus hunting (pulsing), or is the depth-of-field so shallow that the background is entirely blurred (bokeh)?
+    \item Dynamic Dominance: Is the frame dominated ($>$90$\%$) by a moving subject (e.g., a close-up talking head) while the static background is visible but minimal?
+\end{enumerate}
+
+\vspace{0.5em}
+\noindent {STEP 3: EXTRACT METADATA}\\
+"Determine the scene dynamics:"
+\begin{enumerate}[noitemsep, topsep=0pt, leftmargin=*]
+    \item Dynamic: Moving objects are present (people walking, cars moving, wind blowing trees heavily).
+    \item Static: The scene is rigid; only the camera is moving.
+\end{enumerate}
+
+\vspace{0.5em}
+\noindent {OUTPUT INSTRUCTIONS:} \\
+"Return a JSON object strictly following this schema. Do not output markdown formatting or explanations outside the JSON."
+\begin{verbatim}
+{
+"classification": 
+"ACCEPT" | "REJECT_HARD" | "REJECT_SOFT",
+"reason": "Brief descriptions of the primary 
+flaw or 'Good candidate'",
+"scene_dynamics": "Static" | "Dynamic"
+}
+\end{verbatim}
+
+\noindent "Label Definitions:" \\
+{REJECT\_HARD}: Unusable due to editing, synthetic content, severe artifacts, or obstructions. \\
+{REJECT\_SOFT}: Technically usable but risks failure due to rotation-only, reflections, lack of texture, or focus issues. \\
+{ACCEPT}: High-quality candidate. Single shot, clear translation/parallax, good texture, rigid geometry.
+\endgroup
+
+{
+  \vspace{0.5em}
+  \color{linegreen}
+  \hrule
+  \vspace{1pt}
+  \hrule
+  \vspace{1em}
+}

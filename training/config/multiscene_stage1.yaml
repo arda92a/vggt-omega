@@ -1,0 +1,95 @@
+# Stage 1: train only the affinity head on mixed-scene bags.
+# The backbone, camera head, depth head, and scene-attention block stay frozen.
+#
+# From training/:
+#   torchrun --nproc_per_node=1 launch.py --config multiscene_stage1 \
+#     checkpoint.model_weight_path=/path/to/vggt_omega_1b_512.pt \
+#     data.train.dataset.dataset_configs.uco3d.UNIFIED_DIR=/path/to/unified/uco3d \
+#     ~data.train.dataset.dataset_configs.eden
+#
+# Drop any dataset you are not using with ~data.train.dataset.dataset_configs.<name>.
+# The loader batch (after per_gpu_batch_scale) must be a multiple of mixed_scene.num_scenes.
+# 4 frames -> preset batch 10; scale 0.2 gives 2 sequences, packed into one bag of 2 scenes.
+
+defaults:
+  - default
+  - _self_
+
+exp_name: vggt_omega_multiscene_stage1
+max_epochs: 20
+
+model:
+  multiscene:
+    enabled: true
+    threshold: 0.5
+    bias_scale: 1.0
+    num_heads: 16
+    # Pose loss is off in this stage, so the camera head can still see the whole bag.
+    isolate_camera: false
+    camera_groups: gt
+
+data:
+  train:
+    per_gpu_batch_scale: 0.2
+    mixed_scene:
+      num_scenes: 2
+      min_frames: 3
+    common_config:
+      fix_img_num: 4
+      fix_aspect_ratio: 1.0
+      frames_per_sample_range: [4, 4]
+      load_track: false
+
+loss:
+  # Each scene is already in its own camera frame. Do not renormalize the packed bag.
+  normalize_predictions: false
+  normalize_gt: false
+  camera: null
+  depth: null
+  point: null
+  track: null
+  affinity:
+    weight: 1.0
+    # Scene attention is frozen in this stage, so the output affinity is not a target yet.
+    include_output: false
+
+optim:
+  frozen_module_names:
+    - aggregator
+    - camera_head
+    - dense_head
+    - multiscene.scene_attention
+  optimizer:
+    lr: 1.0e-4
+    weight_decay: 0.05
+  # The default schedule also targets patch_embed. Those weights are frozen here, and a
+  # pattern that matches nothing aborts optimizer setup.
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 1.0e-4
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: [multiscene]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: [aggregator, patch_embed]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: [dense_head]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: [camera_head]
+        max_norm: 1.0
+        norm_type: 2
+
+logging:
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+        - loss_affinity
+        - affinity_f1
+        - group_agreement

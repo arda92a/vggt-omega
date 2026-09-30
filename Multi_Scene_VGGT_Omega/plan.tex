@@ -1,0 +1,314 @@
+\documentclass[11pt, a4paper]{article}
+
+% ------------------------------------------------------------
+% Packages
+% ------------------------------------------------------------
+\usepackage[a4paper, top=2.6cm, bottom=2.6cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage[sfdefault]{noto}          % Noto Sans (pdfLaTeX)
+\renewcommand{\familydefault}{\sfdefault}
+
+\usepackage{amsmath, amssymb, bm}
+\usepackage{booktabs, array, tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage[most]{tcolorbox}
+\usepackage[colorlinks=true, linkcolor=accent, urlcolor=accent, citecolor=accent,
+            pdftitle={Multi-Scene VGGT-Omega: Project Plan},
+            pdfauthor={}]{hyperref}
+
+% ------------------------------------------------------------
+% Colours and layout
+% ------------------------------------------------------------
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{softgray}{HTML}{F3F5F8}
+\definecolor{rulegray}{HTML}{C9D1DB}
+
+\setstretch{1.12}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setlist{itemsep=0.25em, topsep=0.3em, parsep=0pt}
+\setlist[itemize,1]{label=\textcolor{accent}{\textbullet}}
+\setlist[enumerate,1]{label=\textcolor{accent}{\textbf{\arabic*.}}}
+
+% Section headings
+\titleformat{\section}
+  {\Large\bfseries\color{accent}}{\thesection}{0.7em}{}
+  [\vspace{-0.4em}{\color{rulegray}\titlerule[0.8pt]}]
+\titleformat{\subsection}
+  {\large\bfseries\color{accent!85!black}}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.6em}{0.8em}
+\titlespacing*{\subsection}{0pt}{1.2em}{0.4em}
+
+% Header / footer
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{rulegray}\leaders\hrule height \headrulewidth\hfill}}
+\fancyhead[L]{\small\color{gray} Multi-Scene VGGT-$\Omega$}
+\fancyhead[R]{\small\color{gray} Project Plan}
+\fancyfoot[C]{\small\color{gray} \thepage}
+
+% Info box
+\newtcolorbox{keybox}[1][]{
+  enhanced, breakable, colback=softgray, colframe=accent,
+  boxrule=0pt, leftrule=3pt, arc=0pt, left=10pt, right=10pt, top=6pt, bottom=6pt,
+  fonttitle=\bfseries\color{accent}, coltitle=accent, title={#1},
+  attach boxed title to top left={yshift=-2mm, xshift=0mm},
+  boxed title style={colback=softgray, boxrule=0pt, left=0pt, top=0pt, bottom=0pt},
+  before skip=10pt, after skip=10pt
+}
+
+% Macros
+\newcommand{\zcam}{\bm{z}_{\mathrm{cam}}}
+\newcommand{\zscene}{\bm{z}_{\mathrm{scene}}}
+\newcommand{\zdino}{\bm{z}_{\mathrm{dino}}}
+\newcommand{\Lall}{\mathcal{L}}
+\newcommand{\VGGT}{VGGT-$\Omega$}
+
+% ------------------------------------------------------------
+% Title
+% ------------------------------------------------------------
+\title{%
+  {\Huge\bfseries\color{accent} Multi-Scene \VGGT}\\[0.6em]
+  {\Large\color{gray} Detailed Project Plan and Architecture Strategy}%
+}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{fancy}
+\vspace{-2.5em}
+
+\begin{keybox}[Summary]
+This document describes the project plan, architecture, and training strategy of the
+\textbf{Multi-Scene \VGGT} network. The model appends \emph{scene} and \emph{camera}
+register tokens to DINO features, applies alternating attention across frames, groups
+the input images into scenes with an internal affinity predictor, and jointly solves
+for 3D geometry and camera poses of every discovered scene.
+\end{keybox}
+
+\tableofcontents
+\vspace{1em}
+
+% ============================================================
+\section{Architecture Overview}
+% ============================================================
+The architecture processes features from a foundation model (DINO) and augments them with
+specialized register tokens that model camera and scene information.
+
+\subsection{Tokenization and Feature Extraction}
+For each input image $i$, spatial features $\zdino$ are extracted with DINO and
+concatenated with two sets of learnable register tokens:
+\begin{itemize}
+  \item \textbf{Camera token} $\zcam^{(i)} \in \mathbb{R}^{1 \times C}$: a single token that
+        registers camera-specific information.
+  \item \textbf{Scene token} $\zscene^{(i)} \in \mathbb{R}^{16 \times C}$: a group of 16 tokens
+        that captures global scene context.
+\end{itemize}
+The final representation of image $i$ is
+\begin{equation}
+  \bm{z}_i = \big[\, \zdino^{(i)} \,;\, \zcam^{(i)} \,;\, \zscene^{(i)} \,\big]
+  \in \mathbb{R}^{(HW + 17) \times C},
+\end{equation}
+where $H \times W$ is the spatial resolution of the feature map and $C$ is the channel
+dimension.
+
+\subsection{Alternating Attention}
+The token sequence is processed by the \VGGT{} transformer, which consists of
+\textbf{24 blocks}. Each block alternates between two attention types:
+\begin{enumerate}
+  \item \textbf{Frame attention:} self-attention computed \emph{within} each frame
+        (intra-frame).
+  \item \textbf{Global attention:} attention computed across the tokens of \emph{all}
+        frames in the batch (inter-frame).
+\end{enumerate}
+
+% ============================================================
+\section{Scene Attention and Affinity Prediction}
+% ============================================================
+Frames that belong to the \emph{same} scene should exchange information, while unrelated
+frames must remain isolated. This is achieved by a dedicated \textbf{scene attention}
+step, applied after the 24 alternating-attention blocks (referred to as block 25).
+
+\subsection{Standard Attention over Scene Tokens}
+The scene tokens of all frames are gathered. For a batch of $N$ images the total number of
+scene tokens is $M = 16N$. The query, key, and value matrices are
+\begin{equation}
+  \bm{Q}, \bm{K}, \bm{V} \in \mathbb{R}^{M \times d_k},
+\end{equation}
+and the base attention score matrix is
+\begin{equation}
+  \bm{S} = \frac{\bm{Q}\bm{K}^{\top}}{\sqrt{d_k}} \in \mathbb{R}^{M \times M}.
+\end{equation}
+
+\subsection{Affinity Matrix and Masking}
+To block attention between tokens of \emph{different} scenes, a pairwise affinity matrix
+$\hat{\bm{A}} \in [0,1]^{N \times N}$ is learned in four steps:
+
+\begin{enumerate}
+  \item \textbf{Descriptor extraction.} Average the 16 scene tokens of each image to obtain a
+        scene descriptor
+        \begin{equation}
+          \bm{h}_i = \frac{1}{16}\sum_{k=1}^{16} \zscene^{(i)}[k] \in \mathbb{R}^{C}.
+        \end{equation}
+  \item \textbf{Affinity prediction.} Pass each pair of descriptors $(\bm{h}_i, \bm{h}_j)$
+        through a linear layer followed by a sigmoid to obtain $\hat{A}_{ij}$:
+        \begin{itemize}
+          \item $\hat{A}_{ij} \approx 1$: images $i$ and $j$ belong to the \textbf{same} scene.
+          \item $\hat{A}_{ij} \approx 0$: images $i$ and $j$ belong to \textbf{different} scenes.
+        \end{itemize}
+  \item \textbf{Thresholding.} Convert $\hat{\bm{A}}$ into an additive mask
+        $\bm{B} \in \{0, -\infty\}^{N \times N}$ with threshold $\tau$:
+        \begin{equation}
+          B_{ij} =
+          \begin{cases}
+            0       & \text{if } \hat{A}_{ij} \ge \tau \quad (\text{same scene}),\\
+            -\infty & \text{otherwise} \quad (\text{different scene}).
+          \end{cases}
+        \end{equation}
+        The mask is expanded to token level as $\bm{B} \otimes \bm{1}_{16 \times 16}
+        \in \mathbb{R}^{M \times M}$, so that every image pair controls a $16 \times 16$
+        block of attention scores.
+  \item \textbf{Masked attention.} Add the mask to the scores before the softmax:
+        \begin{equation}
+          \bm{W} = \mathrm{Softmax}\!\left(\bm{S} + \bm{B} \otimes \bm{1}_{16 \times 16}\right).
+        \end{equation}
+        Entries set to $-\infty$ receive an attention weight of exactly $0$, which strictly
+        prevents cross-scene contamination.
+\end{enumerate}
+
+% ============================================================
+\section{Scene Grouping and Forward Output}
+% ============================================================
+After thresholding, the batch of independent images is clustered into distinct scene
+groups, for example:
+\begin{itemize}
+  \item \textbf{Group A:} images $\{1, 2, 3\}$
+  \item \textbf{Group B:} images $\{4, 5, 6\}$
+\end{itemize}
+For each group an \textbf{origin (reference) image} is assigned. It serves as the anchor
+for reconstructing the 3D scene and for computing relative camera poses.
+
+The forward pass returns its output hierarchically, one entry per scene:
+\begin{tcolorbox}[enhanced, colback=softgray, colframe=rulegray, boxrule=0.5pt, arc=2pt,
+                  left=8pt, right=8pt, top=4pt, bottom=4pt]
+\begin{verbatim}
+output = [
+    {
+        "images":       [1, 2, 3],
+        "pointcloud":   ...,   # 3D points of scene A
+        "camera_poses": ...    # poses relative to the origin image
+    },
+    {
+        "images":       [4, 5, 6],
+        ...
+    }
+]
+\end{verbatim}
+\end{tcolorbox}
+
+% ============================================================
+\section{Loss Functions}
+% ============================================================
+The training objective is a weighted sum of three terms that jointly optimize scene
+clustering, geometric reconstruction, and camera localization.
+
+\begin{table}[h]
+  \centering
+  \small
+  \renewcommand{\arraystretch}{1.35}
+  \begin{tabularx}{\textwidth}{@{}l l X@{}}
+    \toprule
+    \textbf{Term} & \textbf{Symbol} & \textbf{Purpose} \\
+    \midrule
+    Affinity loss & $\Lall_{\text{affinity}}$ & Supervises the affinity head so that scene groupings are identified correctly. \\
+    Geometry loss & $\Lall_{\text{geom}}$ & 3D point error of the reconstruction of each separated scene. \\
+    Pose loss     & $\Lall_{\text{pose}}$ & Rotation and translation error w.r.t.\ each scene's anchor image. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Affinity Loss}
+The predicted matrix $\hat{\bm{A}}$ is compared with the ground-truth adjacency matrix
+$\bm{A}$ (where $A_{ij}=1$ if images $i$ and $j$ come from the same scene):
+\begin{equation}
+  \Lall_{\text{affinity}} = \mathrm{BCE}\big(\hat{\bm{A}}, \bm{A}\big).
+\end{equation}
+
+\subsection{Geometry Loss}
+$\Lall_{\text{geom}}$ is a 3D point loss evaluated on the reconstructed geometry of each
+separated scene. It is computed as a per-pixel 3D distance between predicted and ground-truth
+point clouds (or depth maps).
+
+\subsection{Pose Loss}
+$\Lall_{\text{pose}}$ is evaluated independently for each scene with respect to its anchor
+image and combines rotational and translational errors:
+\begin{equation}
+  \Lall_{\text{pose}} = \Lall_{\text{rot}} + \lambda_t \, \Lall_{\text{trans}}.
+\end{equation}
+
+\subsection{Total Loss}
+The three tasks are balanced with hyperparameters $\lambda_1, \lambda_2, \lambda_3$:
+\begin{equation}
+  \Lall_{\text{total}} =
+  \lambda_1 \, \Lall_{\text{affinity}} +
+  \lambda_2 \, \Lall_{\text{geom}} +
+  \lambda_3 \, \Lall_{\text{pose}}.
+\end{equation}
+
+% ============================================================
+\section{Training Strategy and Dataset}
+% ============================================================
+
+\subsection{Mixed-Scene Batch Generation}
+To train the affinity predictor, every batch must contain multiple scenes. A
+\textbf{mixed-scene batch generator} builds batches of size
+\begin{equation}
+  N = S \times K,
+\end{equation}
+where
+\begin{itemize}
+  \item $N$ is the total number of frames in the batch,
+  \item $S$ is the number of distinct scenes sampled, and
+  \item $K$ is the number of frames per scene, with the strict condition $K \ge 3$.
+\end{itemize}
+
+\subsection{Datasets}
+The model is trained on a diverse mix of indoor and outdoor multi-view datasets:
+
+\begin{table}[h]
+  \centering
+  \small
+  \renewcommand{\arraystretch}{1.3}
+  \begin{tabular}{@{}l l@{}}
+    \toprule
+    \textbf{Dataset} & \textbf{Setting} \\
+    \midrule
+    ScanNet / ScanNet++ & Indoor \\
+    Replica             & Indoor \\
+    MegaDepth           & Outdoor \\
+    ETH3D               & Indoor / outdoor \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Two-Stage Fine-Tuning}
+To stabilize the multi-task optimization, training is split into two stages:
+\begin{enumerate}
+  \item \textbf{Stage 1: Affinity initialization.} Freeze the transformer backbone and
+        train only the affinity head with $\Lall_{\text{affinity}}$. The network must first
+        separate scenes reliably before geometry and pose are estimated.
+  \item \textbf{Stage 2: End-to-end fine-tuning.} Unfreeze all parameters and train end to end
+        with the full $\Lall_{\text{total}}$, using a significantly smaller learning rate.
+\end{enumerate}
+
+\end{document}

@@ -1,0 +1,36 @@
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Performance on the LIBERO benchmark.}
+We freeze our pretrained model, feed the scene tokens as additional input to OpenVLA-OFT, and report the success rate (SR) (higher is better).
+The clear gains validate the effectiveness of our scene tokens in aggregating spatial information.
+}%
+\label{tab:vla}
+\scriptsize
+\renewcommand{\tabcolsep}{4pt}
+\begin{tabular}{cccccc}
+\toprule
+\multicolumn{1}{c}{Method}
+& \begin{tabular}[c]{@{}c@{}}Spatial\\ SR (\%)\end{tabular}
+& \begin{tabular}[c]{@{}c@{}}Object\\ SR (\%)\end{tabular}
+& \begin{tabular}[c]{@{}c@{}}Goal\\ SR (\%)\end{tabular}
+& \begin{tabular}[c]{@{}c@{}}Long\\ SR (\%)\end{tabular}
+& \begin{tabular}[c]{@{}c@{}}Average\\ SR (\%)\end{tabular}
+\\ \midrule
+Diffusion Policy & 78.3 & 92.5 & 68.3 & 50.5 & 72.4 \\
+TraceVLA         & 84.6 & 85.2 & 75.1 & 54.1 & 74.8 \\
+Octo             & 78.9 & 85.7 & 84.6 & 51.1 & 75.1 \\
+OpenVLA          & 84.7 & 88.4 & 79.2 & 53.7 & 76.5 \\
+Dita             & 84.2 & 96.3 & 85.4 & 63.8 & 82.4 \\
+CoT-VLA          & 87.5 & 91.6 & 87.6 & 69.0 & 83.9 \\
+$\pi_0$-FAST     & 96.4 & 96.8 & 88.6 & 60.2 & 85.5 \\
+$\pi_0$          & 96.8 & 98.8 & 95.8 & 85.2 & 94.2 \\
+UniVLA           & 96.5 & 96.8 & 95.6 & 92.0 & 95.2 \\
+OpenVLA-OFT      & 97.6 & 98.4 & 97.9 & 94.5 & 97.1 \\
+\midrule
+\begin{tabular}[c]{@{}c@{}}OpenVLA-OFT\\ + Our Frozen Scene Tokens\end{tabular} & \textbf{99.3} & \textbf{99.2} & \textbf{99.0} & \textbf{96.7} & \textbf{98.5} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+

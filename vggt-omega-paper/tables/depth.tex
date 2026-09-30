@@ -1,0 +1,61 @@
+\begin{table*}[htbp]
+\caption{\textbf{Depth Estimation} across static and dynamic benchmarks.
+The metric \(\delta_{1.25}\) denotes the percentage of predicted depths within a factor of the ground truth (higher is better), and AbsRel is the mean absolute relative error (lower is better).}%
+\label{tab:depth}
+% \vspace{-1em}
+\centering
+\tiny
+\setlength{\tabcolsep}{6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{c *{6}{cc}}
+\toprule
+\multirow{3}{*}{\textbf{Method}}
+& \multicolumn{6}{c}{\textbf{Static Scenes}}
+& \multicolumn{6}{c}{\textbf{Dynamic Scenes}} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-13}
+& \multicolumn{2}{c}{\textbf{7 Scenes}}
+& \multicolumn{2}{c}{\textbf{NRGBD}}
+& \multicolumn{2}{c}{\textbf{ETH3D}}
+& \multicolumn{2}{c}{\textbf{DyCheck}}
+& \multicolumn{2}{c}{\textbf{Sintel}}
+& \multicolumn{2}{c}{\textbf{TUM\text{-}Dynamic}} \\
+& \(\delta_{1.25}\) & {AbsRel}
+& \(\delta_{1.25}\) & {AbsRel}
+& \(\delta_{1.25}\) & {AbsRel}
+& \(\delta_{1.25}\) & {AbsRel}
+& \(\delta_{1.25}\) & {AbsRel}
+& \(\delta_{1.25}\) & {AbsRel} \\
+\midrule
+{MonST3R} & 92.4 & 0.075 & 98.4 & 0.030 & 95.8 & 0.056 & 93.3 & 0.068 & 71.9 & 0.263 & 85.0 & 0.148 \\
+MapAnything & 92.9 & 0.070 & 98.7 & 0.022 & 96.3 & 0.035 & 97.0 & 0.049 & 72.5 & 0.251 & 93.1 & 0.052 \\
+{MegaSaM} & 93.8 & 0.065 & 96.2 & 0.057 & 94.8 & 0.083 & 97.4 & 0.042 & 74.1 & 0.207 & 92.9 & 0.083 \\
+{VGGT}    & 91.9 & 0.073 & 99.1 & 0.019 & 97.4 & 0.036 & 95.2 & 0.055 & 79.2 & 0.189 & 92.2 & 0.064 \\
+{PI3}     & 92.8 & 0.068 & 99.2 & 0.011 & {99.6} & 0.016 & 97.4 & 0.041 & 82.5 & 0.144 & 95.5 & 0.046 \\
+{DA3} & 93.0 & 0.063 & 99.5 & 0.010 & 99.6 & 0.015 & 97.7 & 0.039 & 86.1 & 0.118 & 94.3 & 0.049 \\
+\midrule
+{Ours-1B} 
+& \underline{94.6} & \underline{0.058} 
+& \underline{99.6} & \underline{0.010} 
+& \underline{99.8} & \underline{0.012} 
+& \underline{98.4} & \underline{0.038} 
+& \underline{89.5} & \underline{0.097} 
+& \underline{97.4} & \underline{0.041} \\
+{Ours-10B} 
+& \textbf{96.3} & \textbf{0.050} 
+& \textbf{99.7} & \textbf{0.007} 
+& \textbf{99.8} & \textbf{0.009} 
+& \textbf{98.7} & \textbf{0.030} 
+& \textbf{93.5} & \textbf{0.081} 
+& \textbf{98.3} & \textbf{0.035} \\
+\bottomrule
+\end{tabular}%
+}%
+\vspace{-10pt}
+\end{table*}
+
+
+
+
+
+
+

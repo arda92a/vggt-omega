@@ -834,7 +834,11 @@ class Trainer:
             enabled=self.optim_conf.amp.enabled,
             dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
         ):
-            y_hat = model(batch["images"])
+            scene_id = batch.get("scene_id")
+            if scene_id is None:
+                y_hat = model(batch["images"])
+            else:
+                y_hat = model(batch["images"], scene_id=scene_id)
 
         with torch.autocast(device_type="cuda", enabled=False):
             # The camera loss weights a sequence of pose predictions, one per refinement stage.

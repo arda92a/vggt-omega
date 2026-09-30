@@ -1,0 +1,72 @@
+\begin{table*}[htbp]
+\caption{\textbf{Camera Pose Estimation} across static and dynamic benchmarks.
+The metric AUC is higher-is-better. 
+Feed-forward models (DA3, PI3, VGGT) are robust across datasets, but still lag behind the dynamic optimization-based method MegaSaM at strict thresholds on Sintel (\eg, AUC@$3^\circ$ of $16.2$ \vs $22.5$). 
+In contrast, dynamic optimization methods (MegaSaM, MonST3R) degrade on wide-baseline scenes (\eg, AUC@$30^\circ$ of $38.1$ \vs $86.4$ on ETH3D). 
+Our method, however, substantially advances the state of the art across all scenarios, \eg, improving AUC@$3^\circ$ from $22.5$ to $40.0$ on Sintel, with a $77\%$ relative improvement.}%
+\label{tab:camera}
+% \vspace{-1em}
+\centering
+\scriptsize
+\setlength{\tabcolsep}{6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{c *{6}{cc}}
+\toprule
+\multirow{3}{*}{\textbf{Method}}
+& \multicolumn{6}{c}{\textbf{Static Scenes}}
+& \multicolumn{6}{c}{\textbf{Dynamic Scenes}} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-13}
+& \multicolumn{2}{c}{\textbf{7 Scenes}}
+& \multicolumn{2}{c}{\textbf{NRGBD}}
+& \multicolumn{2}{c}{\textbf{ETH3D}}
+& \multicolumn{2}{c}{\textbf{DyCheck}}
+& \multicolumn{2}{c}{\textbf{Sintel}}
+& \multicolumn{2}{c}{\textbf{TUM\text{-}Dynamic}} \\
+& AUC@3° & AUC@30°
+& AUC@3° & AUC@30°
+& AUC@3° & AUC@30°
+& AUC@3° & AUC@30°
+& AUC@3° & AUC@30°
+& AUC@3° & AUC@30° \\
+\midrule
+{MonST3R} 
+& 9.0 & 68.3 & 13.9 & 79.7 & 1.7 & 14.3 
+& 11.5 & 45.4 & 4.3 & 45.8 & 7.7 & 48.5 \\
+MapAnything & 5.8 & 61.4 & 35.2 & 88.9 & 13.2 & 51.0 & 6.1 & 60.3 & 2.9 & 31.6 & 4.3 & 40.2 \\
+{MegaSaM} 
+& 10.6 & 71.8 & 17.2 & 83.1 & 5.9 & 38.1 
+& 26.8 & 53.1 & 22.5 & 58.3 & 15.4 & 59.0 \\
+{VGGT}    
+& 10.9 & 74.4 & 81.7 & 97.7 & 18.8 & 62.1 
+& 21.0 & 78.7 & 15.0 & 50.0 & 16.6 & 61.2 \\
+{PI3}     
+& 13.3 & 77.0 & 83.8 & 98.2 & 35.3 & 79.6
+& 23.3 & 81.0 & 14.8 & 53.5 & 16.1 & 59.2 \\
+{DA3} & 18.7 & 78.2 & 86.4 & 98.4 & 46.1 & 87.0 & 32.1 & 83.9 & 16.2 & 52.7 & 20.8 & 62.7 \\
+\midrule
+{Ours-1B} 
+& \underline{29.6} & \underline{83.1} 
+& \underline{89.7} & \underline{98.8} 
+& \underline{49.8} & \underline{88.5} 
+& \underline{38.4} & \underline{87.3} 
+& \underline{35.3} & \underline{73.0} 
+& \underline{30.2} & \underline{82.3} \\
+{Ours-10B} 
+& \textbf{36.4} & \textbf{88.2} 
+& \textbf{92.5} & \textbf{99.1} 
+& \textbf{56.3} & \textbf{90.4} 
+& \textbf{43.7} & \textbf{90.9} 
+& \textbf{40.0} & \textbf{79.1} 
+& \textbf{36.4} & \textbf{87.5} \\
+\bottomrule
+\end{tabular}%
+}
+\vspace{-1em}
+\end{table*}
+
+
+
+
+
+
+

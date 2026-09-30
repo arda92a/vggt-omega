@@ -1,0 +1,100 @@
+\subsection{Training Data}%
+\label{sec:data}
+
+\input{tables/camera}
+\input{tables/depth}
+
+An important aspect of \method is to scale the training data, which we achieve by combining a large number of publicly available datasets (\cref{sec:data-sources}) with a new annotation pipeline that we develop to handle dynamic content in off-the-shelf videos (\cref{sec:annotation-pipeline}).
+
+\subsubsection{Data Sources}%
+\label{sec:data-sources}
+
+We first collect several publicly available datasets:
+Aria series~\cite{pan23aria},
+Bedlam~\cite{black23bedlam:},
+BEHAVIOR-1K~\cite{li24behavior-1k:},
+Co3Dv2~\cite{reizenstein21common},
+uCo3D~\cite{liu25uco3d},
+DL3DV~\cite{ling23dl3dv-10k:},
+Dynamic Replica~\cite{karaev23dynamicstereo},
+EDEN~\cite{le21eden:},
+EFM3D~\cite{straub24efm3d:},
+HOT3D~\cite{banerjee24introducing},
+Habitat~\cite{habitat19iccv},
+Hypersim~\cite{roberts21hypersim:},
+Mapfree~\cite{arnold22map-free},
+Mapillary Metropolis~\cite{mapillary25metropolis},
+MPSD~\cite{antequera20mapillary},
+Megadepth~\cite{li18megadepth:},
+Megasynth~\cite{jiang25megasynth:},
+Mid-Air~\cite{fonder19mid-air:},
+Mvssynth~\cite{huang18deepmvs:},
+ParallelDomain-4D~\cite{hoorick24generative},
+Replica~\cite{straub19the-replica},
+SAIL-VOS~\cite{hu21sail-vos},
+ScanNet Series~\cite{dai17scannet:, yeshwanth23scannet:},
+TartanAirV2~\cite{wang20tartanair:},
+TartanGround~\cite{patel25tartanground:},
+Taskonomy~\cite{zamir18taskonomy:},
+UnrealStereo4K~\cite{tosi21smd-nets:},
+Virtual KITTI~\cite{cabon20virtual},
+Waymo~\cite{sun20scalability}, and
+WildRGBD~\cite{xia24rgbd}.
+We exclude Kubric~\cite{greff22kubric:} and PointOdyssey~\cite{zheng23pointodyssey:} used by VGGT because their background geometry is fake and yields invalid depth.
+Additionally, we use several internal datasets, which include artist-created object assets, rigid and dynamic synthetic environments, real-world device captures, and related sources.
+For non-synthetic datasets (\eg, those annotated by SfM pipelines), we remove noisy depth values via a multi-view consistency check and discard sequences with too few valid depth pixels.
+In total, these datasets contain approximately $3$M sequences, each containing between $10$ and $20{,}000$ images.
+
+\subsubsection{Data Annotation Pipeline}%
+\label{sec:annotation-pipeline}
+
+To further expand our training data, we built a large internal video collection of roughly $40$M Internet-style videos.
+We first assess each video for suitability for reconstruction, \eg filtering out clips with large watermarks or abrupt shot changes.
+Videos that pass this check are used for self-supervised training as described in \cref{sec:self-supervised-training}.
+We then introduce a new pipeline to annotate videos with camera parameters and depth maps, for both static and dynamic scenes.
+We prioritize annotation quality over quantity and aggressively reject low-quality data.
+We also discard depth annotations in regions that are likely to be dynamic.
+This may exclude extreme camera motions or highly dynamic scenes, but these are still well represented in the synthetic datasets.
+Overall, we obtain a collection of about $200$K dynamic scenes and $600$K static scenes with high-quality camera and depth annotations.
+
+\paragraph{VLM pre-filtering.}
+
+We prompt a Vision-Language Model (VLM) to discard videos that are unlikely to be reconstructed using multi-view geometry.
+The VLM classifies $50\%$ of the clips as too difficult to reconstruct, \eg, because they contain multiple clips, extreme motion blur, or heavy overlays or watermarks.
+It also classifies $40\%$ of them as reconstructible, but potentially with low accuracy due to insufficient parallax, lack of non-repetitive texture, etc.
+The remaining $10\%$ of videos go to the next stage.
+In the same pass, the VLM extracts metadata, such as whether the scene appears dynamic, for use by later stages.
+
+\paragraph{Dynamic mask extraction.}
+
+We use Grounding DINO~\cite{liu24grounding} to detect bounding boxes of potentially movable object categories, such as people and cars.
+These regions are then excluded from matching, tracking, and verification.
+
+\paragraph{Feature matching and tracking.}
+
+We extract matches and tracks across frames with an ensemble of methods, using
+SIFT~\cite{lowe99object},
+SuperPoint \& SuperGlue~\cite{daniel18superpoint:, sarlin20superglue:},
+ALIKED \& LightGlue~\cite{zhao23aliked:, lindenberger23lightglue:}, and
+VGGSfM Tracker~\cite{wang24vggsfm:}.
+Matches within dynamic regions are discarded.
+
+\paragraph{Reconstruction and filtering.}
+
+We use the original VGGT to initialize camera parameters when RANSAC-based essential matrix estimation yields too few inliers, and then run COLMAP~\cite{schonberger16structure-from-motion} for iterative bundle adjustment and filtering based on the correspondences computed above.
+For successful reconstructions, we discard sequences that fail heuristic checks, \eg, an image registration ratio $<99.5\%$, a field of view outside $[30^\circ,120^\circ]$, or a distortion ratio $>0.1$.
+These criteria aggressively remove cases with degenerate motion or extreme zoom.
+Then, we estimate per-frame dense depth maps using patch-based multi-view stereo~\cite{schonberger16pixelwise}.
+
+\paragraph{Multi-view consistency.}
+
+For each frame, we unproject the depth map to 3D, reproject the points into other views, and compare them with the depths there.
+Pixels that satisfy this cross-view consistency check are marked valid.
+We discard sequences with fewer than $5\%$ of pixels with valid depth, which typically, though not always, indicates low-quality cameras.
+
+\paragraph{Supervised geometric filtering.}
+
+Finally, we obtain cameras, depths, and valid masks for every sequence.
+We use handcrafted features, such as camera-up-vector consistency, parallax angle, and trajectory smoothness, to describe each sequence.
+We hand-annotated 500 static and 500 dynamic sequences, respectively, to train a classifier to remove low-quality reconstructions.
+The classifier is an ensemble of XGBoost~\cite{chen16xgboost:}, random forests~\cite{breiman01random}, and CatBoost~\cite{prokhorenkova18catboost:}.

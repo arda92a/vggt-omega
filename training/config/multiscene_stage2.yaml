@@ -1,0 +1,74 @@
+# Stage 2: affinity, scene attention, and per-scene pose and depth.
+# The camera head runs separately on each ground-truth scene, so its attention
+# cannot cross a scene boundary. At inference there is no label, and the head
+# uses the predicted groups instead.
+# Point loss stays off: it couples depth and camera in one shared frame.
+#
+# From training/:
+#   torchrun --nproc_per_node=1 launch.py --config multiscene_stage2 \
+#     checkpoint.model_weight_path=/path/to/stage1/checkpoint.pt \
+#     data.train.dataset.dataset_configs.uco3d.UNIFIED_DIR=/path/to/unified/uco3d \
+#     ~data.train.dataset.dataset_configs.eden
+
+defaults:
+  - multiscene_stage1
+  - _self_
+
+exp_name: vggt_omega_multiscene_stage2
+max_epochs: 10
+
+model:
+  multiscene:
+    isolate_camera: true
+    camera_groups: gt
+
+loss:
+  affinity:
+    weight: 1.0
+    include_output: true
+  camera:
+    weight: 1.0
+    weight_trans: 2.0
+    weight_rot: 1.0
+    weight_focal: 1.0
+    normalize_trans_by_gt_scale: true
+    weight_pairwise: 1.0
+    pairwise_weight_rotation: 1.0
+    pairwise_weight_translation: 1.0
+  depth:
+    weight: 1.0
+    weight_normal: 0.0
+    min_valid_pts: 100
+    abs_l1_loss_ratio: 1.0
+    rel_l1_loss_ratio: 0.2
+    max_pixel_loss: 100.0
+    use_conf_loss: false
+    gradient_loss_config: null
+  point: null
+  track: null
+
+optim:
+  frozen_module_names:
+    - aggregator
+  optimizer:
+    lr: 1.0e-5
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 1.0e-5
+
+logging:
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+        - loss_affinity
+        - affinity_f1
+        - affinity_output_f1
+        - group_agreement
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_depth
+        - abs_rel
