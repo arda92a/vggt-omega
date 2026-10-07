@@ -1,6 +1,6 @@
 # Evaluation
 
-Evaluation code for VGGT-Omega on ETH3D and Sintel. This codebase is an agent-assisted
+Evaluation code for VGGT-Omega on Sintel. This codebase is an agent-assisted
 cleanup of our original evaluation implementation. If you encounter any problems, please open a
 [GitHub issue](https://github.com/facebookresearch/vggt-omega/issues).
 
@@ -19,7 +19,6 @@ pip install -r eval/requirements.txt
 ## Prepare data
 
 ```bash
-python eval/prepare.py eth3d --output data/eth3d
 python eval/prepare.py sintel --output data/sintel
 ```
 
@@ -28,7 +27,7 @@ server and then a pinned Hugging Face mirror. Use `--source official`, `--source
 `--source local --archive-dir /path/to/archives` to choose explicitly. To convert an
 already extracted official dataset, pass `--raw-root`.
 
-Prepared data has the same layout for both datasets:
+Prepared data has the layout:
 
 ```text
 data/<dataset>/<scene>/
@@ -42,13 +41,11 @@ data/<dataset>/<scene>/
 
 ```bash
 python eval/evaluate.py \
-  --dataset eth3d \
-  --data-root data/eth3d \
+  --dataset sintel \
+  --data-root data/sintel \
   --checkpoint /path/to/vggt_omega_1b_416_reproduce.pt \
-  --output outputs/eth3d.json
+  --output outputs/sintel.json
 ```
-
-Change `eth3d` to `sintel` for Sintel.
 
 ## Output
 

@@ -1,2 +1,1 @@
 huggingface_hub
-py7zr

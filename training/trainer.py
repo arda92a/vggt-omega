@@ -23,6 +23,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from hydra.utils import instantiate
+from omegaconf import OmegaConf
 
 
 from train_utils.checkpoint import (
@@ -95,8 +96,12 @@ class Trainer:
         fsdp_settings: Optional[Dict[str, Any]] = None,
         accum_steps: int = 1,
         start_epoch: int = 0,
+        validation: Optional[Dict[str, Any]] = None,
+        eval_only: bool = False,
     ):
         self.accum_steps = accum_steps
+        self.validation_conf = validation or {}
+        self.eval_only = eval_only
         self._setup_env_variables(env_variables)
         self._setup_timers()
 
@@ -106,6 +111,7 @@ class Trainer:
         self.checkpoint_conf = TrainerCheckpointConf(**checkpoint)
         self.max_epochs = max_epochs
         self.limit_train_batches = limit_train_batches
+        self.optim_conf_raw = optim
         self.optim_conf = TrainerOptimConf(**optim or {})
         self.loss_conf = loss
         distributed = TrainerDistributedConf(**distributed or {})
@@ -431,12 +437,137 @@ class Trainer:
     def run(self):
         if self.epoch > 0:
             logging.info(f"Resuming training from epoch {self.epoch}")
+        if self.eval_only:
+            self._log_validation(self.run_validation(self.epoch), self.epoch)
+            return
         self.run_train()
 
     def _setup_dataloaders(self):
         self.train_dataset = instantiate(self.data_conf.train, _recursive_=False)
+        self.val_dataset = None
+        if self.validation_conf.get("enabled", False):
+            val_conf = OmegaConf.create(OmegaConf.to_container(self.data_conf.train, resolve=True))
+            val_conf.common_config.training = False
+            val_conf.num_workers = int(self.validation_conf.get("num_workers", 2))
+            val_conf.seed = int(self.validation_conf.get("seed", 7))
+            if self.validation_conf.get("mixed_scene") is not None:
+                val_conf.mixed_scene = OmegaConf.create(
+                    OmegaConf.to_container(self.validation_conf["mixed_scene"], resolve=True)
+                )
+            self.val_dataset = instantiate(val_conf, _recursive_=False)
+
+    def _validation_due(self) -> bool:
+        if self.val_dataset is None:
+            return False
+        every = int(self.validation_conf.get("every_n_epochs", 1))
+        return (int(self.epoch) + 1) % every == 0 or int(self.epoch) + 1 == self.max_epochs
+
+    @torch.no_grad()
+    def run_validation(self, epoch: int) -> Dict[str, float]:
+        """Score mixed bags with the predicted, oracle and plain systems. Returns rank-averaged metrics."""
+        if self.val_dataset is None:
+            raise RuntimeError("Validation is not configured. Set validation.enabled=true.")
+        from multiscene_eval import run_systems
+
+        model = unwrap_ddp_if_wrapped(self.model)
+        was_training = model.training
+        model.eval()
+        set_seeds(int(self.validation_conf.get("seed", 7)), self.max_epochs, self.rank)
+        num_batches = int(self.validation_conf.get("num_batches", 50))
+        include_separate = bool(self.validation_conf.get("include_separate", False))
+
+        sums: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        first_bag = None
+        loader = self.val_dataset.get_loader(epoch=0)
+        for index, batch in enumerate(loader):
+            if index >= num_batches:
+                break
+            batch = copy_data_to_device(batch, self.device, non_blocking=True)
+            for row in range(batch["images"].shape[0]):
+                with torch.autocast(
+                    device_type="cuda",
+                    enabled=self.optim_conf.amp.enabled,
+                    dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
+                ):
+                    try:
+                        report = run_systems(
+                            model,
+                            batch["images"][row],
+                            batch["scene_id"][row],
+                            batch["extrinsics"][row],
+                            batch["depths"][row],
+                            threshold=model.multiscene.threshold,
+                            include_separate=include_separate,
+                        )
+                    except ValueError as error:
+                        logging.warning(f"Skipping validation bag: {error}")
+                        continue
+                for system, scores in report.items():
+                    for key, value in scores.items():
+                        name = f"{system}/{key}"
+                        sums[name] = sums.get(name, 0.0) + float(value)
+                        counts[name] = counts.get(name, 0) + 1
+                sums["stats/num_scenes"] = sums.get("stats/num_scenes", 0.0) + float(batch["num_scenes"][row])
+                counts["stats/num_scenes"] = counts.get("stats/num_scenes", 0) + 1
+                if first_bag is None and self.rank == 0:
+                    first_bag = (batch["images"][row], batch["scene_id"][row])
+        del loader
+
+        gathered = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, (sums, counts))
+        total_sums: Dict[str, float] = {}
+        total_counts: Dict[str, int] = {}
+        for rank_sums, rank_counts in gathered:
+            for name, value in rank_sums.items():
+                total_sums[name] = total_sums.get(name, 0.0) + value
+                total_counts[name] = total_counts.get(name, 0) + rank_counts[name]
+        metrics = {name: total_sums[name] / total_counts[name] for name in total_sums}
+        metrics["stats/num_bags"] = float(total_counts.get("stats/num_scenes", 0))
+
+        if first_bag is not None and self.wandb_writer is not None and not self._is_fsdp_training():
+            self._log_affinity_images(model, *first_bag, epoch)
+        model.train(was_training)
+        return metrics
+
+    def _log_affinity_images(self, model, images: torch.Tensor, scene_id: torch.Tensor, epoch: int) -> None:
+        with torch.no_grad(), torch.autocast(
+            device_type="cuda",
+            enabled=self.optim_conf.amp.enabled,
+            dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
+        ):
+            prediction = model(images.unsqueeze(0))
+        target = (scene_id[:, None] == scene_id[None, :]).float()
+        self.wandb_writer.log_affinity(
+            {
+                "final": prediction["affinity"][0].float().cpu().numpy(),
+                "route": prediction["route_affinity"][0].float().cpu().numpy(),
+                "target": target.cpu().numpy(),
+            },
+            epoch,
+        )
+
+    def _log_validation(self, metrics: Dict[str, float], epoch: int) -> None:
+        if self.rank != 0:
+            return
+        payload = {f"val/{name}": value for name, value in metrics.items()}
+        summary = ", ".join(
+            f"{name}={value:.4f}"
+            for name, value in payload.items()
+            if name.startswith(("val/predicted/", "val/oracle/"))
+            and name.rsplit("/", 1)[1] in ("ari", "auc_30", "abs_rel", "affinity_f1")
+        )
+        logging.info(f"Epoch [{epoch}] validation: {summary}")
+        if self.wandb_writer is not None:
+            self.wandb_writer.log_epoch(payload, epoch)
 
     def run_train(self):
+        if (
+            self.val_dataset is not None
+            and self.validation_conf.get("at_start", True)
+            and self.epoch == self.start_epoch
+        ):
+            self._log_validation(self.run_validation(self.start_epoch - 1), self.start_epoch - 1)
         while self.epoch < self.max_epochs:
             set_seeds(self.seed_value + self.epoch*100, self.max_epochs, self.rank)
             gc.collect()
@@ -448,6 +579,8 @@ class Trainer:
 
             dist.barrier()
             self.save_checkpoint(self.epoch)
+            if self._validation_due():
+                self._log_validation(self.run_validation(int(self.epoch)), int(self.epoch))
 
             del dataloader
             gc.collect()
@@ -551,6 +684,10 @@ class Trainer:
             if step % self.logging_conf.log_freq == 0 and self.rank == 0:
                 for key, value in scalar_values.items():
                     self.tb_writer.log(f"Values/{phase}/{key}", value, step)
+                if self.wandb_writer is not None:
+                    step_metrics = {f"train_step/{key}": value for key, value in scalar_values.items()}
+                    step_metrics["train_step/lr"] = self.optims[0].optimizer.param_groups[0]["lr"]
+                    self.wandb_writer.log_step(step_metrics, step)
 
             # fvcore's schedulers reject where == 1.0, so skip the final update.
             if self.schedule_progress < 1.0:
@@ -801,6 +938,19 @@ class Trainer:
             if self.logging_conf.wandb_writer is not None
             else None
         )
+        if self.wandb_writer is not None:
+            self.wandb_writer.update_config(
+                {
+                    name: OmegaConf.to_container(section, resolve=True)
+                    for name, section in (
+                        ("model", self.model_conf),
+                        ("loss", self.loss_conf),
+                        ("optim", self.optim_conf_raw),
+                        ("data", self.data_conf),
+                    )
+                    if section is not None
+                }
+            )
         self.model = instantiate(self.model_conf, _recursive_=False)
 
 
@@ -855,6 +1005,10 @@ class Trainer:
         phase: str,
     ):
 
+        model_inner = unwrap_ddp_if_wrapped(model)
+        if hasattr(model_inner, "set_group_progress"):
+            model_inner.set_group_progress(self.schedule_progress)
+
         with torch.autocast(
             device_type="cuda",
             enabled=self.optim_conf.amp.enabled,
@@ -871,6 +1025,8 @@ class Trainer:
             # This head emits a single stage, so wrap it into the list the loss expects.
             if "pose_enc" in y_hat:
                 y_hat["pose_enc_list"] = [y_hat["pose_enc"]]
+            if hasattr(model_inner, "gt_group_prob"):
+                y_hat["gt_group_prob"] = torch.tensor(model_inner.gt_group_prob)
             loss_dict = self.loss(y_hat, batch, self.schedule_progress)
 
         log_data = {**y_hat, **loss_dict, **batch}

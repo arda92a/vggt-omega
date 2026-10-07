@@ -66,6 +66,7 @@ class UnifiedDataset(BaseDataset):
         max_percentile=-1,
         min_percentile=-1,
         sequence_list_file=None,
+        val_sequence_list_file=None,
         jump_prob=0.1,
         train_split_ratio=-1.0,
         sample_by_index=False,
@@ -134,6 +135,7 @@ class UnifiedDataset(BaseDataset):
             self.max_percentile = max_percentile
         self.min_percentile = min_percentile
         self.sequence_list_file = sequence_list_file
+        self.val_sequence_list_file = val_sequence_list_file
         self.train_split_ratio = train_split_ratio
         self.image_names_filename = image_names_filename
         self.cam_from_worlds_filename = cam_from_worlds_filename
@@ -197,10 +199,17 @@ class UnifiedDataset(BaseDataset):
 
         logging.info(f"UNIFIED_DIR is {self.UNIFIED_DIR}")
 
-        # Load sequence list
-        if self.sequence_list_file:
-            logging.info(f"Loading sequence list from {self.sequence_list_file}")
-            with open(self.sequence_list_file, "r") as f:
+        # Load sequence list. Validation uses its own list when one is given.
+        list_file = self.sequence_list_file
+        if not self.training and self.val_sequence_list_file:
+            list_file = self.val_sequence_list_file
+        if list_file:
+            logging.info(f"Loading sequence list from {list_file}")
+            list_path = Path(list_file)
+            if not list_path.is_absolute() and not list_path.exists():
+                # Bundled lists such as valid_seqs/uco3d.txt are relative to training/.
+                list_path = Path(__file__).resolve().parents[2] / list_path
+            with open(list_path, "r") as f:
                 sequence_list = [line.strip() for line in f if line.strip()]
         else:
             # each directory in UNIFIED_DIR is a scene

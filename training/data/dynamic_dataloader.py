@@ -18,20 +18,14 @@ from .worker_fn import get_worker_init_fn
 
 
 def _resolve_collate(collate_fn: Optional[Callable], mixed_scene: Optional[dict]) -> Optional[Callable]:
-    """Use the mixed-scene collate when the config asks for more than one scene."""
+    """Use the mixed-scene collate when the config has a `mixed_scene` section."""
     if mixed_scene is None:
-        return collate_fn
-    num_scenes = int(mixed_scene.get("num_scenes", 1))
-    if num_scenes <= 1:
         return collate_fn
     if collate_fn is not None:
         raise ValueError("data.train.collate_fn and data.train.mixed_scene cannot both be set")
     from .mixed_scene import MixedSceneCollate
 
-    return MixedSceneCollate(
-        num_scenes=num_scenes,
-        min_frames=int(mixed_scene.get("min_frames", 3)),
-    )
+    return MixedSceneCollate(**{key: value for key, value in mixed_scene.items()})
 
 
 DEFAULT_DISCRETE_ASPECT_RATIOS = (

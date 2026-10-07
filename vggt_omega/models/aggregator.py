@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Callable
+
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
@@ -114,7 +116,15 @@ class Aggregator(nn.Module):
     def forward(
         self,
         images: torch.Tensor,
+        router: Callable[[torch.Tensor], torch.Tensor | None] | None = None,
+        route_layer: int | None = None,
     ) -> tuple[list[torch.Tensor | None], int]:
+        """Run the alternating-attention blocks.
+
+        After block `route_layer`, `router` receives the scene tokens (B, N, 16, 2C) and may
+        return group ids (B, N). Inter-frame attention in every later block then runs inside
+        each group only. Returning None keeps all frames in one attention.
+        """
         batch_size, num_frames, num_channels, height, width = images.shape
         if num_channels != 3:
             raise ValueError(f"Expected 3 input channels, got {num_channels}")
@@ -141,6 +151,7 @@ class Aggregator(nn.Module):
             )
 
         outputs = []
+        group_id = None
         for block_idx in range(self.depth):
             tokens, frame_tokens = self._run_frame_block(
                 tokens,
@@ -159,11 +170,17 @@ class Aggregator(nn.Module):
                 embed_dim,
                 block_idx,
                 self.inter_frame_attention_types[block_idx],
+                group_id,
             )
             if block_idx in self.cached_layer_indices:
                 outputs.append(torch.cat([frame_tokens, tokens], dim=-1))
             else:
                 outputs.append(None)
+
+            if router is not None and block_idx == route_layer:
+                scene_slice = slice(1, self.patch_token_start)
+                scene_tokens = torch.cat([frame_tokens[:, :, scene_slice], tokens[:, :, scene_slice]], dim=-1)
+                group_id = router(scene_tokens)
 
         return outputs, self.patch_token_start
 
@@ -190,8 +207,19 @@ class Aggregator(nn.Module):
         embed_dim: int,
         block_idx: int,
         attention_type: str,
+        group_id: torch.Tensor | None = None,
     ) -> torch.Tensor:
         tokens = tokens.view(batch_size, num_frames, num_tokens, embed_dim)
+        if group_id is None:
+            return self._inter_frame_attention(tokens, block_idx, attention_type)
+        return _apply_by_group(
+            tokens,
+            group_id,
+            lambda part: self._inter_frame_attention(part, block_idx, attention_type),
+        )
+
+    def _inter_frame_attention(self, tokens: torch.Tensor, block_idx: int, attention_type: str) -> torch.Tensor:
+        batch_size, num_frames, num_tokens, embed_dim = tokens.shape
 
         if attention_type == "global":
             tokens = tokens.view(batch_size, num_frames * num_tokens, embed_dim)
@@ -231,6 +259,29 @@ class Aggregator(nn.Module):
             embed_dim,
         )
         return torch.cat([camera_and_register_tokens, patch_tokens], dim=2)
+
+
+def _apply_by_group(tokens: torch.Tensor, group_id: torch.Tensor, fn: Callable[[torch.Tensor], torch.Tensor]) -> torch.Tensor:
+    """Apply `fn` to the frames of each group separately. `tokens` is (B, N, T, C).
+
+    Equivalent to a block-diagonal attention mask, but each group keeps its own dense
+    attention. A row with one group costs the same as no grouping.
+    """
+    if group_id.shape != tokens.shape[:2]:
+        raise ValueError(f"group_id {tuple(group_id.shape)} does not match tokens {tuple(tokens.shape[:2])}")
+    rows = []
+    for batch_index in range(tokens.shape[0]):
+        row = tokens[batch_index : batch_index + 1]
+        groups = torch.unique(group_id[batch_index])
+        if groups.numel() == 1:
+            rows.append(fn(row))
+            continue
+        out = row
+        for group in groups:
+            index = torch.nonzero(group_id[batch_index] == group, as_tuple=False).flatten()
+            out = out.index_copy(1, index, fn(row.index_select(1, index)).to(row.dtype))
+        rows.append(out)
+    return torch.cat(rows, dim=0)
 
 
 def _build_patch_embed(patch_size: int, embed_dim: int, use_checkpoint: bool = False) -> DinoVisionTransformer:

@@ -39,7 +39,7 @@ def _write_json(path: Path, value: dict) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", choices=("eth3d", "sintel"), required=True)
+    parser.add_argument("--dataset", choices=("sintel",), required=True)
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)

@@ -32,6 +32,7 @@ export = [
 ]
 train = [
     "torch>=2.6",
+    "torchvision>=0.21",
     "hydra-core>=1.3",
     "omegaconf>=2.3",
     "fvcore",
@@ -47,6 +48,23 @@ curation = [
     "scipy",
     "xgboost",
 ]
+
+# `uv run` installs these groups by default, so `uv run python train.py` works after a plain checkout.
+[dependency-groups]
+train = [
+    "torch>=2.6",
+    "torchvision>=0.21",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "fvcore",
+    "tensorboard",
+    "wcmatch",
+    "wandb",
+]
+dev = ["pytest"]
+
+[tool.uv]
+default-groups = ["train", "dev"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

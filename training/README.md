@@ -149,3 +149,33 @@ If training runs out of GPU memory, try the following, in order:
 3. Reduce the upper bound of **`data.train.common_config.frames_per_sample_range`** (default: `[2, 32]`). Fewer frames per sample reduce activation memory.
 
 Setting `use_checkpoint: true` enables activation checkpointing for the aggregator and patch embedding layers. Keep it enabled unless you have memory to spare.
+
+## 6. Multi-scene training
+
+Fine-tunes the released model to group a bag of frames into scenes and reconstruct each one.
+Design and metrics are in [`Multi_Scene_VGGT_Omega/plan.tex`](../Multi_Scene_VGGT_Omega/plan.tex).
+Run from the repository root:
+
+```bash
+export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*, in the unified layout
+uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 2   # writes train.txt, val.txt
+uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
+uv run python train.py --config multiscene_stage2 \
+    checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt   # stage 2
+uv run torchrun --nproc_per_node=8 train.py ...                                               # several GPUs
+uv run python train.py --eval-only checkpoint.model_weight_path=...                           # validation only
+uv run python training/multiscene_smoke.py                                                    # CPU checks
+```
+
+`uv run` installs the `train` and `dev` dependency groups from `pyproject.toml`. Training needs a CUDA GPU.
+Any hydra override can follow, for example `max_epochs=1`, `~data.train.dataset.dataset_configs.eden`, or
+`logging.wandb_writer.mode=offline` (`enabled=false` turns wandb off; run `wandb login` once otherwise).
+
+Wandb panels: `train_step/*` per step, `train/*` and `val/*` per epoch, plus an affinity heat-map. Validation runs
+before training and after every epoch on a held-out scenes (`val.txt`) and reports the `predicted`, `oracle`
+and `plain` systems (`val/<system>/<metric>`), and the gaps `val/contamination/*` and `val/cluster_gap/*`.
+Metrics: `ari`, `exact_partition`, `affinity_f1`, `rotation_deg`, `rra_15`, `rta_15`, `auc_30`, `abs_rel`, `delta125`.
+
+After training, `model.predict_scenes(images)` returns one entry per scene with `images`, `anchor`, `camera_poses` and
+`pointcloud`. Bags come from `data.train.mixed_scene` (scene count, frames per scene, same-dataset negatives);
+a bag uses as many scenes as the loader batch allows, up to `max(num_scenes_range)`, so raise `per_gpu_batch_scale` to see larger bags.

@@ -1,14 +1,13 @@
-# Stage 2: affinity, scene attention, and per-scene pose and depth.
-# The camera head runs separately on each ground-truth scene, so its attention
-# cannot cross a scene boundary. At inference there is no label, and the head
-# uses the predicted groups instead.
-# Point loss stays off: it couples depth and camera in one shared frame.
+# Stage 2: scene attention, camera head, and depth head on mixed-scene bags.
+# The backbone stays frozen. Inter-frame attention runs inside each group (routed after
+# `route_layer`), so the frozen features are the ones the released model saw for one scene.
+# The camera head runs once per group. Pose and point losses are computed per ground-truth
+# scene and relative to the scene's first frame, because the network predicts each scene in
+# its own gauge.
 #
-# From training/:
-#   torchrun --nproc_per_node=1 launch.py --config multiscene_stage2 \
-#     checkpoint.model_weight_path=/path/to/stage1/checkpoint.pt \
-#     data.train.dataset.dataset_configs.uco3d.UNIFIED_DIR=/path/to/unified/uco3d \
-#     ~data.train.dataset.dataset_configs.eden
+# From the repository root:
+#   MERGED_DIR=... uv run python train.py --config multiscene_stage2 \
+#     checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt
 
 defaults:
   - multiscene_stage1
@@ -20,11 +19,12 @@ max_epochs: 10
 model:
   multiscene:
     isolate_camera: true
-    camera_groups: gt
+    gt_group_prob: [0.5, 0.0]
 
 loss:
   affinity:
     weight: 1.0
+    route_weight: 1.0
     include_output: true
   camera:
     weight: 1.0
@@ -44,7 +44,13 @@ loss:
     max_pixel_loss: 100.0
     use_conf_loss: false
     gradient_loss_config: null
-  point: null
+  # 3D point error in the anchor camera frame of each scene.
+  point:
+    weight: 1.0
+    min_valid_pts: 100
+    abs_l1_loss_ratio: 1.0
+    rel_l1_loss_ratio: 0.2
+    max_pixel_loss: 100.0
   track: null
 
 optim:
@@ -58,17 +64,41 @@ optim:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
           value: 1.0e-5
 
+validation:
+  include_separate: true
+
 logging:
   scalar_keys_to_log:
     train:
       keys_to_log:
         - loss_objective
         - loss_affinity
+        - loss_affinity_final
+        - loss_affinity_route
+        - loss_affinity_output
         - affinity_f1
         - affinity_output_f1
-        - group_agreement
+        - route_f1
+        - ari
+        - route_ari
+        - exact_partition
+        - scene_count_error
+        - num_scenes
+        - num_frames
+        - gt_group_prob
+        - used_gt_groups
         - loss_camera
         - loss_T
         - loss_R
+        - loss_FL
+        - loss_PW
+        - Rac_5
+        - Rac_15
+        - Tac_5
+        - Tac_15
+        - Auc_30
         - loss_depth
         - abs_rel
+        - d1
+        - loss_point
+        - point_l1_unweighted

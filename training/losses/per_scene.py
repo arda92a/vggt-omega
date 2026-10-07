@@ -1,12 +1,20 @@
 """Evaluate a frame loss separately on each scene, then average.
 
-A mixed bag stores several scenes in one tensor. Camera pairs and depth
-reductions must not cross a scene boundary. Ground-truth scene ids define the
-slices. Predicted groups are not used here: a wrong group would supervise a
-camera against another scene's geometry.
+A mixed bag stores several scenes in one tensor. Camera pairs and depth reductions must
+not cross a scene boundary. Ground-truth scene ids define the slices. Predicted groups
+are not used here: a wrong group would supervise a camera against another scene's
+geometry.
+
+The network predicts each scene's cameras in its own gauge: nothing tells it which frame
+of a scene is the origin. `anchor_to_first_frame` therefore expresses prediction and
+ground truth relative to the same frame of the slice before any pose or point loss.
 """
 
 import torch
+
+from vggt_omega.utils.pose_enc import encoding_to_camera
+from vggt_omega.utils.rotation import mat_to_quat
+from vggt_omega.utils.scenes import poses_relative_to_anchor
 
 
 _FRAME_KEYS = (
@@ -39,6 +47,28 @@ def mean_over_scenes(loss_fn, predictions, batch, scene_id: torch.Tensor) -> dic
     return _average_dicts(scene_losses)
 
 
+def anchor_to_first_frame(predictions: dict, batch: dict) -> tuple[dict, dict]:
+    """Re-express predicted and ground-truth cameras of one scene slice relative to its first frame.
+
+    Returns copies. The first frame becomes identity in both, so it carries no pose loss,
+    and every other frame is compared in a gauge both sides share.
+    """
+    pose = predictions["pose_enc_list"][-1]
+    if pose.shape[0] != 1:
+        raise ValueError(f"Expected one bag per scene slice, got batch {pose.shape[0]}")
+    image_hw = batch["images"].shape[-2:]
+
+    predicted, _ = encoding_to_camera(pose, image_hw, build_intrinsics=False)
+    relative = poses_relative_to_anchor(predicted[0], 0)
+    anchored = torch.cat([relative[:, :, 3], mat_to_quat(relative[:, :, :3]), pose[0, :, 7:]], dim=-1)
+
+    target = poses_relative_to_anchor(batch["extrinsics"][0], 0).unsqueeze(0)
+    return (
+        {**predictions, "pose_enc_list": [anchored.unsqueeze(0)]},
+        {**batch, "extrinsics": target},
+    )
+
+
 def _slice_scene(predictions, batch, batch_index: int, frame_index: torch.Tensor):
     num_frames = batch["scene_id"].shape[1]
     sliced_predictions = {}
@@ -58,13 +88,9 @@ def _slice_scene(predictions, batch, batch_index: int, frame_index: torch.Tensor
             sliced_batch[key] = _index_frames(value, batch_index, frame_index, num_frames)
     for key in _ROW_KEYS:
         value = batch.get(key)
-        if torch.is_tensor(value) and value.shape[0] == scene_batch_size(batch):
+        if torch.is_tensor(value) and value.shape[0] == batch["scene_id"].shape[0]:
             sliced_batch[key] = value[batch_index : batch_index + 1]
     return sliced_predictions, sliced_batch
-
-
-def scene_batch_size(batch) -> int:
-    return int(batch["scene_id"].shape[0])
 
 
 def _index_frames(value: torch.Tensor, batch_index: int, frame_index: torch.Tensor, num_frames: int) -> torch.Tensor:

@@ -1,15 +1,15 @@
-# Stage 1: train only the affinity head on mixed-scene bags.
-# The backbone, camera head, depth head, and scene-attention block stay frozen.
+# Stage 1: train the two affinity heads on mixed-scene bags.
+# The backbone, camera head, depth head, and scene-attention block stay frozen, so the
+# only supervision is "which frames share a scene".
 #
-# From training/:
-#   torchrun --nproc_per_node=1 launch.py --config multiscene_stage1 \
-#     checkpoint.model_weight_path=/path/to/vggt_omega_1b_512.pt \
-#     data.train.dataset.dataset_configs.uco3d.UNIFIED_DIR=/path/to/unified/uco3d \
-#     ~data.train.dataset.dataset_configs.eden
+# From the repository root:
+#   MERGED_DIR=/path/to/unified/merged \
+#   uv run python train.py --config multiscene_stage1 \
+#     checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt
 #
-# Drop any dataset you are not using with ~data.train.dataset.dataset_configs.<name>.
-# The loader batch (after per_gpu_batch_scale) must be a multiple of mixed_scene.num_scenes.
-# 4 frames -> preset batch 10; scale 0.2 gives 2 sequences, packed into one bag of 2 scenes.
+# MERGED_DIR holds one folder per scene plus train.txt and val.txt, written by
+# training/dataset_preparation/split_sequences.py. Validation reads val.txt only.
+# Offline wandb: logging.wandb_writer.mode=offline. Off: logging.wandb_writer.enabled=false.
 
 defaults:
   - default
@@ -17,28 +17,72 @@ defaults:
 
 exp_name: vggt_omega_multiscene_stage1
 max_epochs: 20
+limit_train_batches: 500
 
 model:
   multiscene:
     enabled: true
     threshold: 0.5
-    bias_scale: 1.0
+    linkage: average
     num_heads: 16
-    # Pose loss is off in this stage, so the camera head can still see the whole bag.
+    # Aggregator block after which the route head clusters frames. Later blocks attend inside a group.
+    route_layer: 11
+    isolate_backbone: true
+    # Pose loss is off in this stage, so the camera head still sees the whole bag.
     isolate_camera: false
-    camera_groups: gt
+    # Chance of using ground-truth groups instead of predicted ones, annealed over training.
+    gt_group_prob: [1.0, 0.2]
 
 data:
   train:
-    per_gpu_batch_scale: 0.2
+    per_gpu_batch_scale: 0.5
+    dataset:
+      dataset_configs:
+        # The released-model datasets from default.yaml are not used here.
+        uco3d: null
+        eden: null
+        merged:
+          _target_: data.datasets.unified.UnifiedDataset
+          UNIFIED_DIR: ${oc.env:MERGED_DIR,/YOUR/PATH/TO/UNIFIED/merged}
+          sequence_list_file: ${.UNIFIED_DIR}/train.txt
+          val_sequence_list_file: ${.UNIFIED_DIR}/val.txt
+          dataset_prefix: _merged
+          is_synthetic: false
+          mixture_weight: 100
+          mixture_weight_scale: 1.0
+          frame_window: 64
+          sample_by_index: true
+          revisit_policy: avoid_if_possible
+    # One bag per step: S scenes with 3 to K frames each, shuffled. S = 1 keeps a single scene intact.
     mixed_scene:
-      num_scenes: 2
+      num_scenes_range: [1, 4]
+      scene_count_weights: [0.1, 0.35, 0.3, 0.25]
       min_frames: 3
+      frames_range: [3, 6]
+      max_total_frames: 16
+      shuffle_frames: true
+      same_dataset_prob: 0.5
     common_config:
-      fix_img_num: 4
-      fix_aspect_ratio: 1.0
-      frames_per_sample_range: [4, 4]
+      frames_per_sample_range: [4, 6]
+      fix_img_num: -1
       load_track: false
+
+validation:
+  enabled: true
+  every_n_epochs: 1
+  num_batches: 40
+  num_workers: 2
+  seed: 7
+  at_start: true
+  # Also forward every scene alone, the original model's behaviour. Costs one extra pass per scene.
+  include_separate: false
+  mixed_scene:
+    num_scenes_range: [2, 4]
+    min_frames: 3
+    frames_range: [3, 6]
+    max_total_frames: 16
+    shuffle_frames: true
+    same_dataset_prob: 0.5
 
 loss:
   # Each scene is already in its own camera frame. Do not renormalize the packed bag.
@@ -50,6 +94,7 @@ loss:
   track: null
   affinity:
     weight: 1.0
+    route_weight: 1.0
     # Scene attention is frozen in this stage, so the output affinity is not a target yet.
     include_output: false
 
@@ -60,7 +105,7 @@ optim:
     - dense_head
     - multiscene.scene_attention
   optimizer:
-    lr: 1.0e-4
+    lr: 3.0e-4
     weight_decay: 0.05
   # The default schedule also targets patch_embed. Those weights are frozen here, and a
   # pattern that matches nothing aborts optimizer setup.
@@ -68,7 +113,7 @@ optim:
     lr:
       - scheduler:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
-          value: 1.0e-4
+          value: 3.0e-4
   gradient_clip:
     _target_: train_utils.gradient_clip.GradientClipper
     configs:
@@ -86,9 +131,6 @@ optim:
         norm_type: 2
 
 logging:
-  # Epoch averages go to wandb under train/<metric>, with the epoch as the x-axis.
-  # `wandb login` once on the machine, or export WANDB_API_KEY.
-  # A restarted run with the same name continues the same chart.
   wandb_writer:
     _target_: train_utils.wandb_logger.WandbLogger
     enabled: true
@@ -97,10 +139,25 @@ logging:
     entity: null
     mode: online
     dir: logs/${exp_name}/wandb
+    step_freq: 10
   scalar_keys_to_log:
     train:
       keys_to_log:
         - loss_objective
         - loss_affinity
+        - loss_affinity_final
+        - loss_affinity_route
         - affinity_f1
+        - route_f1
         - group_agreement
+        - route_group_agreement
+        - ari
+        - route_ari
+        - exact_partition
+        - route_exact_partition
+        - scene_count_error
+        - route_scene_count_error
+        - num_scenes
+        - num_frames
+        - gt_group_prob
+        - used_gt_groups

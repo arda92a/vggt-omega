@@ -54,7 +54,6 @@ def load_pair(checkpoint_path: str, device: str):
         multiscene={
             "enabled": True,
             "isolate_camera": True,
-            "camera_groups": "predicted",
             "num_heads": 16,
         }
     ).to(device).eval()
@@ -84,12 +83,7 @@ def compare_checkpoint(checkpoint_path: str, images: torch.Tensor, device: str, 
 
 
 def _forward_isolated(model, images, isolate: bool):
-    previous = model.isolate_camera
-    model.isolate_camera = isolate
-    try:
-        return model(images)
-    finally:
-        model.isolate_camera = previous
+    return model(images, isolate=isolate)
 
 
 def _within(report: dict, atol: float) -> bool:

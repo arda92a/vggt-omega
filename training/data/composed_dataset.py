@@ -29,7 +29,9 @@ class ComposedDataset(Dataset):
             else dataset_configs
         )
         datasets = [
-            instantiate(config, common_conf=common_config) for config in configs
+            instantiate(config, common_conf=common_config)
+            for config in configs
+            if config is not None
         ]
         self.base_dataset = TupleConcatDataset(datasets, common_config)
 

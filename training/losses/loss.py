@@ -13,7 +13,7 @@ from losses.base_loss.depth import compute_depth_loss
 from losses.base_loss.point import compute_point_loss
 from losses.gt_normalization import normalize_gt_batch
 from losses.normalization import normalize_predictions_differentiable
-from losses.per_scene import mean_over_scenes
+from losses.per_scene import anchor_to_first_frame, mean_over_scenes
 
 
 def _extract_weight(config):
@@ -82,8 +82,6 @@ class MultitaskLoss(torch.nn.Module):
             raise ValueError(
                 "normalize_gt cannot run on a mixed-scene batch. Each scene is already in its own frame."
             )
-        if per_scene and self.point is not None:
-            raise ValueError("Point loss is not split by scene yet. Leave loss.point unset for multi-scene training.")
         if per_scene and self.track is not None:
             raise ValueError("Track loss is not split by scene yet. Leave loss.track unset for multi-scene training.")
         if self.normalize_gt:
@@ -113,7 +111,9 @@ class MultitaskLoss(torch.nn.Module):
             )
             if per_scene:
                 camera_loss_dict = mean_over_scenes(
-                    lambda pred, sub: compute_camera_loss(pred, sub, **camera_kwargs),
+                    lambda pred, sub: compute_camera_loss(
+                        *anchor_to_first_frame(pred, sub), **camera_kwargs
+                    ),
                     predictions,
                     batch,
                     batch["scene_id"],
@@ -143,13 +143,26 @@ class MultitaskLoss(torch.nn.Module):
             and "depth" in predictions
             and "pose_enc_list" in predictions
         ):
-            predictions, batch, point_loss_dict = compute_point_loss(
-                predictions,
-                batch,
-                intrinsics_warmup_ratio=self.intrinsics_warmup_ratio,
-                schedule_progress=schedule_progress,
-                **self.point,
-            )
+            if per_scene:
+                point_loss_dict = mean_over_scenes(
+                    lambda pred, sub: compute_point_loss(
+                        *anchor_to_first_frame(pred, sub),
+                        intrinsics_warmup_ratio=self.intrinsics_warmup_ratio,
+                        schedule_progress=schedule_progress,
+                        **self.point,
+                    )[2],
+                    predictions,
+                    batch,
+                    batch["scene_id"],
+                )
+            else:
+                predictions, batch, point_loss_dict = compute_point_loss(
+                    predictions,
+                    batch,
+                    intrinsics_warmup_ratio=self.intrinsics_warmup_ratio,
+                    schedule_progress=schedule_progress,
+                    **self.point,
+                )
             total_loss = total_loss + point_loss_dict["loss_point"] * self.point_weight
             loss_dict.update(point_loss_dict)
 

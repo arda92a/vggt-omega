@@ -255,3 +255,8 @@ accum_steps: 1
 seed_value: 264813
 start_epoch: 0
 env_variables: null
+
+# Held-out validation on mixed-scene bags. Off for single-scene training.
+validation: null
+# Run one validation pass and exit, without training.
+eval_only: false

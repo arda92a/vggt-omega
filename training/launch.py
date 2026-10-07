@@ -26,6 +26,10 @@ def load_config(config_name: str = "default", overrides=None):
     return cfg
 
 
+def run(config_name: str = "default", overrides=None) -> None:
+    Trainer(**load_config(config_name, overrides)).run()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train VGGT-Omega")
     parser.add_argument("--config", default="default", help="config name under training/config, without .yaml")
@@ -36,7 +40,7 @@ def main():
     )
     args = parser.parse_args()
 
-    Trainer(**load_config(args.config, args.overrides)).run()
+    run(args.config, args.overrides)
 
 
 if __name__ == "__main__":
