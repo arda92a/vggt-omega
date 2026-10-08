@@ -158,7 +158,7 @@ Run from the repository root:
 
 ```bash
 export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*, in the unified layout
-uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 2   # writes train.txt, val.txt
+uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 4   # writes train.txt, val.txt
 uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
 uv run python train.py --config multiscene_stage2 \
     checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt   # stage 2

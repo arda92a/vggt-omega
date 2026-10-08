@@ -1,6 +1,6 @@
 """Check a unified dataset and split its scenes into train.txt and val.txt.
 
-    uv run python training/dataset_preparation/split_sequences.py /path/to/merged --val-per-source 2
+    uv run python training/dataset_preparation/split_sequences.py /path/to/merged --val-per-source 4
 
 A scene is one folder under the root. The source is the part of its name before the first
 underscore (eth3d_courtyard -> eth3d), and every source gives at least --val-per-source scenes
@@ -88,7 +88,7 @@ def split(scenes: list[str], val_per_source: int, seed: int) -> tuple[list[str],
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("root", type=Path, help="unified dataset root, one folder per scene")
-    parser.add_argument("--val-per-source", type=int, default=2, help="validation scenes taken from each source")
+    parser.add_argument("--val-per-source", type=int, default=4, help="validation scenes taken from each source")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
