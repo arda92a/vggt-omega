@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 import torch.distributed as dist
 import torch.nn as nn
 from hydra.utils import instantiate
@@ -462,6 +463,27 @@ class Trainer:
         every = int(self.validation_conf.get("every_n_epochs", 1))
         return (int(self.epoch) + 1) % every == 0 or int(self.epoch) + 1 == self.max_epochs
 
+    def _progress(self, iterable, total, desc):
+        """Rank 0 progress bar. Other ranks iterate the loader unchanged."""
+        if self.rank != 0:
+            return iterable
+        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True, leave=True, mininterval=0.5)
+
+    @staticmethod
+    def _meter_postfix(meters) -> Dict[str, str]:
+        shown = {}
+        for label, name in (
+            ("loss", "train_loss_objective"),
+            ("f1", "train_affinity_f1"),
+            ("route", "train_route_f1"),
+            ("ari", "train_ari"),
+            ("exact", "train_exact_partition"),
+        ):
+            meter = meters.get(name)
+            if meter is not None and meter.count:
+                shown[label] = f"{meter.avg:.3f}"
+        return shown
+
     @torch.no_grad()
     def run_validation(self, epoch: int) -> Dict[str, float]:
         """Score mixed bags with the predicted, oracle and plain systems. Returns rank-averaged metrics."""
@@ -480,7 +502,9 @@ class Trainer:
         counts: Dict[str, int] = {}
         first_bag = None
         loader = self.val_dataset.get_loader(epoch=0)
-        for index, batch in enumerate(loader):
+        desc = "val before training" if epoch < 0 else f"val {int(epoch) + 1}/{self.max_epochs}"
+        progress = self._progress(loader, num_batches, desc)
+        for index, batch in enumerate(progress):
             if index >= num_batches:
                 break
             batch = copy_data_to_device(batch, self.device, non_blocking=True)
@@ -512,6 +536,11 @@ class Trainer:
                 counts["stats/num_scenes"] = counts.get("stats/num_scenes", 0) + 1
                 if first_bag is None and self.rank == 0:
                     first_bag = (batch["images"][row], batch["scene_id"][row])
+            ari_count = counts.get("predicted/ari", 0)
+            if ari_count and hasattr(progress, "set_postfix"):
+                progress.set_postfix(ari=f"{sums['predicted/ari'] / ari_count:.3f}", refresh=False)
+        if hasattr(progress, "close"):
+            progress.close()
         del loader
 
         gathered = [None] * dist.get_world_size()
@@ -647,7 +676,12 @@ class Trainer:
 
         iters_done = 0
         logging.info(f"Starting training at epoch {self.epoch}")
-        for data_iter, batch in enumerate(train_loader):
+        train_bar = self._progress(
+            train_loader,
+            limit_train_batches,
+            f"train {int(self.epoch) + 1}/{self.max_epochs}",
+        )
+        for data_iter, batch in enumerate(train_bar):
             skip_step_logging = data_iter == 0
             if data_iter >= limit_train_batches:
                 break
@@ -679,6 +713,8 @@ class Trainer:
             )
             for key, value in scalar_values.items():
                 scalar_meters[f"{phase}_{key}"].update(value, scalar_weights[key])
+            if hasattr(train_bar, "set_postfix"):
+                train_bar.set_postfix(self._meter_postfix(scalar_meters), refresh=False)
 
             step = self.steps[phase]
             if step % self.logging_conf.log_freq == 0 and self.rank == 0:
@@ -773,6 +809,7 @@ class Trainer:
                 not skip_step_logging
                 and data_iter % self.logging_conf.log_freq == 0
                 and self.rank == 0
+                and not hasattr(train_bar, "set_postfix")
             ):
                 progress.display(data_iter)
 
@@ -793,6 +830,9 @@ class Trainer:
             iters_done = data_iter + 1
 
         self._check_epoch_length_agreement(iters_done, limit_train_batches)
+
+        if hasattr(train_bar, "close"):
+            train_bar.close()
 
         self.est_epoch_time["train"] = batch_time.avg * limit_train_batches
         self._log_timers("train")
