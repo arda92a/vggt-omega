@@ -301,7 +301,11 @@ def voxel_downsample(points, colors, spacing):
 
 def _edge_samples(origin, dest, origin_color, dest_color, spacing):
     length = np.linalg.norm(dest - origin, axis=1)
-    steps = np.clip(np.ceil(length / spacing).astype(np.int32), 1, 16)
+    # Long edges are rare on Replica's dense scan. A coarse face still needs
+    # samples about `spacing` apart, so only a handful of long edges may use a
+    # finer cap. A dense mesh stays on the cheap cap.
+    cap = 80 if int(np.count_nonzero(length > 2.0 * spacing)) < 50_000 else 16
+    steps = np.clip(np.ceil(length / spacing).astype(np.int32), 1, cap)
     if len(steps) == 0 or int(steps.max()) <= 1:
         return np.empty((0, 3), np.float32), np.empty((0, 3), np.float32)
     points = []
@@ -314,6 +318,36 @@ def _edge_samples(origin, dest, origin_color, dest_color, spacing):
         points.append(origin[mask] * (1.0 - weight) + dest[mask] * weight)
         colors.append(origin_color[mask] * (1.0 - weight) + dest_color[mask] * weight)
     return np.concatenate(points), np.concatenate(colors)
+
+
+def _interior_samples(a, b, c, ca, cb, cc, spacing):
+    """Fill faces much larger than `spacing`. Dense Replica faces skip this."""
+    longest = np.maximum(
+        np.maximum(np.linalg.norm(b - a, axis=1), np.linalg.norm(c - a, axis=1)),
+        np.linalg.norm(c - b, axis=1),
+    )
+    mask = longest > 2.0 * spacing
+    if not np.any(mask):
+        return np.empty((0, 3), np.float32), np.empty((0, 3), np.float32)
+    a, b, c = a[mask], b[mask], c[mask]
+    ca, cb, cc = ca[mask], cb[mask], cc[mask]
+    steps = np.clip(np.ceil(longest[mask] / spacing).astype(np.int32), 3, 8 if len(a) > 20_000 else 40)
+    grid = int(steps.max())
+    points = []
+    colors = []
+    for i in range(1, grid):
+        for j in range(1, grid - i):
+            use = steps > (i + j)
+            if not np.any(use):
+                continue
+            u = (i / steps[use]).astype(np.float32)[:, None]
+            v = (j / steps[use]).astype(np.float32)[:, None]
+            w = 1.0 - u - v
+            points.append(u * a[use] + v * b[use] + w * c[use])
+            colors.append(u * ca[use] + v * cb[use] + w * cc[use])
+    if not points:
+        return np.empty((0, 3), np.float32), np.empty((0, 3), np.float32)
+    return np.concatenate(points).astype(np.float32), np.concatenate(colors).astype(np.float32)
 
 
 def surface_cloud(verts, tris, colors, spacing):
@@ -341,6 +375,10 @@ def surface_cloud(verts, tris, colors, spacing):
             if len(extra):
                 samples.append(extra)
                 sample_colors.append(extra_color)
+        extra, extra_color = _interior_samples(a, b, c, ca, cb, cc, spacing)
+        if len(extra):
+            samples.append(extra)
+            sample_colors.append(extra_color)
         reduced.append(voxel_downsample(np.concatenate(samples), np.concatenate(sample_colors), spacing))
     points = np.concatenate([item[0] for item in reduced])
     point_colors = np.concatenate([item[1] for item in reduced])
