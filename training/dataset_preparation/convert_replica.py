@@ -800,7 +800,7 @@ def main(argv=None):
     print(f"{ok} converted, {failed} failed, {len(report) - ok - failed} skipped")
     if failed:
         return 1
-    print("Next: python training/dataset_preparation/split_sequences.py", dst, "--val-per-source 4")
+    print("Next: python training/dataset_preparation/split_sequences.py", dst, "--val-per-source 6")
     return 0
 
 
