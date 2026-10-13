@@ -79,6 +79,35 @@ def as_4x4(extrinsics: torch.Tensor) -> torch.Tensor:
     return poses
 
 
+def partition_scores(groups: torch.Tensor, scene_id: torch.Tensor) -> dict[str, float]:
+    """How well predicted groups (N,) reproduce the true scenes (N,). All values are in [0, 1].
+
+    ari:          adjusted Rand index of the two partitions.
+    perfect_bags: 1 if every frame pair is on the right side, else 0.
+    pair_acc:     share of frame pairs correctly called same scene or different scene.
+    count_acc:    1 if the number of scenes found is right, else 0.
+    separated:    share of different-scene pairs that were split (missing when the bag has one scene).
+    together:     share of same-scene pairs that were kept together (missing with one frame per scene).
+    """
+    groups, scene_id = groups.reshape(-1).cpu(), scene_id.reshape(-1).cpu()
+    if groups.numel() < 2:
+        return {"ari": 1.0, "perfect_bags": 1.0, "pair_acc": 1.0, "count_acc": 1.0}
+    off = ~torch.eye(groups.numel(), dtype=torch.bool)
+    predicted = (groups[:, None] == groups[None, :])[off]
+    actual = (scene_id[:, None] == scene_id[None, :])[off]
+    scores = {
+        "ari": adjusted_rand_index(groups, scene_id),
+        "perfect_bags": float(bool((predicted == actual).all())),
+        "pair_acc": float((predicted == actual).float().mean()),
+        "count_acc": float(groups.unique().numel() == scene_id.unique().numel()),
+    }
+    if (~actual).any():
+        scores["separated"] = float((~predicted[~actual]).float().mean())
+    if actual.any():
+        scores["together"] = float(predicted[actual].float().mean())
+    return scores
+
+
 def adjusted_rand_index(predicted: torch.Tensor, target: torch.Tensor) -> float:
     """Adjusted Rand index of two label vectors (N,). 1 is identical partitions, 0 is chance."""
     if predicted.shape != target.shape or predicted.ndim != 1:

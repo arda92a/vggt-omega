@@ -19,6 +19,7 @@ from losses.base_loss.affinity import balanced_bce, compute_affinity_loss
 from losses.loss import MultitaskLoss
 from losses.per_scene import anchor_to_first_frame, mean_over_scenes
 from multiscene_eval import clustering_scores, depth_scores, pose_scores, run_systems
+from train_utils.report import format_epoch, train_scalars, val_comparisons, val_scalars
 from vggt_omega.models import VGGTOmega
 from vggt_omega.models.aggregator import Aggregator, _apply_by_group
 from vggt_omega.models.multiscene import (
@@ -35,6 +36,7 @@ from vggt_omega.utils.scenes import (
     adjusted_rand_index,
     anchor_offset,
     pack_scenes,
+    partition_scores,
     points_in_anchor_frame,
     poses_relative_to_anchor,
 )
@@ -124,6 +126,46 @@ def test_grouping() -> None:
     labels = scene_groups(torch.eye(4)[None], 0.5)
     _check("all singletons", torch.equal(labels, torch.arange(4)[None]))
     _check("ids follow first frame", torch.equal(scene_groups(torch.tensor([[[1.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]]]), 0.5), torch.tensor([[0, 1, 0]])))
+
+
+def test_partition_scores() -> None:
+    truth = torch.tensor([0, 0, 0, 1, 1, 1])
+    perfect = partition_scores(truth, truth)
+    _check("perfect", all(value == 1.0 for value in perfect.values()) and len(perfect) == 6)
+
+    one_wrong = partition_scores(torch.tensor([0, 0, 0, 1, 1, 0]), truth)
+    _check("one frame misplaced", one_wrong["perfect_bags"] == 0.0 and one_wrong["count_acc"] == 1.0)
+    _check("pairs: 5 of 15 wrong is 66.7 percent right", abs(one_wrong["pair_acc"] - 10 / 15) < 1e-6)
+    _check("separated counts different-scene pairs", abs(one_wrong["separated"] - 6 / 9) < 1e-6)
+    _check("together counts same-scene pairs", abs(one_wrong["together"] - 4 / 6) < 1e-6)
+
+    split = partition_scores(torch.arange(6), truth)
+    _check("everything split", split["separated"] == 1.0 and split["together"] == 0.0 and split["count_acc"] == 0.0)
+    single = partition_scores(torch.zeros(4, dtype=torch.long), torch.zeros(4, dtype=torch.long))
+    _check("one scene has nothing to separate", "separated" not in single and single["together"] == 1.0)
+
+
+def test_report_formatting() -> None:
+    train = {"loss_objective": 0.43, "ari": 0.87, "perfect_bags": 0.72, "pair_acc": 0.94, "gt_group_prob": 0.3, "lr": 3e-4}
+    val = {
+        "predicted/ari": 0.65, "predicted/perfect_bags": 0.4, "predicted/pair_acc": 0.8, "predicted/separated": 0.9,
+        "predicted/together": 0.7, "predicted/route_ari": 0.6, "predicted/route_pair_acc": 0.75,
+        "predicted/auc_30": 0.38, "oracle/auc_30": 0.44, "plain/auc_30": 0.33,
+        "predicted/abs_rel": 0.18, "oracle/abs_rel": 0.12, "plain/abs_rel": 0.2,
+        "predicted/rra_15": 0.5, "predicted/rta_15": 0.4, "stats/num_bags": 40.0, "stats/num_scenes": 2.5,
+    }
+    text = format_epoch(15, 20, train, val, train_seconds=615, val_seconds=170, eta_seconds=1700)
+    _check("one block", text.count("\n") >= 6 and "epoch 16/20" in text)
+    _check("readable wording", "bags split exactly right 72.0%" in text and "different scenes separated 90.0%" in text)
+    _check("three systems on one line", "predicted 0.380 | oracle 0.440 | plain 0.330" in text)
+
+    scalars = val_scalars(val)
+    _check("val scalars are few", len(scalars) <= 14 and "val/ari" in scalars and "val/auc_30" in scalars)
+    _check("no per-system duplicates", not any("oracle" in name or "plain" in name for name in scalars))
+    charts = val_comparisons(val)
+    _check("overlay charts", set(charts["pose_auc30"]) == {"predicted", "oracle", "plain"})
+    _check("train names", set(train_scalars(train)) >= {"train/loss", "train/ari", "train/lr"})
+    _check("baseline block", "before training" in format_epoch(-1, 20, None, val))
 
 
 def test_adjusted_rand_index() -> None:
@@ -387,9 +429,10 @@ def test_balanced_bce_and_affinity_loss() -> None:
     }
     batch = {"affinity": (scene_id[:, :, None] == scene_id[:, None, :]).float(), "scene_id": scene_id}
     out = compute_affinity_loss(predictions, batch)
-    _check("perfect prediction", float(out["loss_affinity"]) < 0.02 and float(out["affinity_f1"]) == 1.0)
-    _check("partition metrics", float(out["ari"]) == 1.0 and float(out["exact_partition"]) == 1.0)
-    _check("route metrics", "route_ari" in out and "route_f1" in out)
+    _check("perfect prediction", float(out["loss_affinity"]) < 0.02 and float(out["pair_acc"]) == 1.0)
+    _check("partition metrics", float(out["ari"]) == 1.0 and float(out["perfect_bags"]) == 1.0)
+    _check("separated and together", float(out["separated"]) == 1.0 and float(out["together"]) == 1.0)
+    _check("route metrics", "route_ari" in out and "route_pair_acc" in out)
 
 
 def test_pose_loss_ignores_the_gauge_of_each_scene() -> None:
@@ -476,9 +519,10 @@ def test_eval_scores() -> None:
         "route_group_id": scene_id[None],
     }
     scores = clustering_scores(prediction, scene_id)
-    _check("perfect clustering", scores["affinity_f1"] == 1.0 and scores["ari"] == 1.0 and scores["exact_partition"] == 1.0)
+    _check("perfect clustering", scores["ari"] == 1.0 and scores["perfect_bags"] == 1.0 and scores["pair_acc"] == 1.0)
     prediction["group_id"] = torch.zeros(1, 4, dtype=torch.long)
-    _check("merged scenes are scored", clustering_scores(prediction, scene_id)["scene_count_error"] == 1.0)
+    merged = clustering_scores(prediction, scene_id)
+    _check("merged scenes are scored", merged["count_acc"] == 0.0 and merged["separated"] == 0.0 and merged["together"] == 1.0)
 
     identity = torch.eye(3, 4).unsqueeze(0).repeat(2, 1, 1)
     turned = identity.clone()

@@ -46,7 +46,7 @@ def get_amp_type(amp_type: Optional[str] = None):
 def set_seeds(seed_value, max_epochs, dist_rank):
     """Give every rank a different seed, so ranks do not draw identical data orders."""
     seed_value = (seed_value + dist_rank) * max_epochs
-    logging.info(f"Seed for this rank: {seed_value}")
+    logging.debug(f"Seed for this rank: {seed_value}")
     random.seed(seed_value)
     np.random.seed(seed_value)
     torch.manual_seed(seed_value)

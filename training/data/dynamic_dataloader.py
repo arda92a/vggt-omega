@@ -143,7 +143,7 @@ class DynamicTorchDataset:
 
     def get_loader(self, epoch):
         self.batch_sampler.set_epoch(epoch)
-        logging.info("Building dynamic dataloader for epoch %s", epoch)
+        logging.debug("Building dynamic dataloader for epoch %s", epoch)
 
         loader_kwargs = {
             "num_workers": self.num_workers,

@@ -17,37 +17,17 @@ import torch
 from losses.metric import rotation_angle, translation_angle
 from vggt_omega.utils.geometry import closed_form_inverse_se3
 from vggt_omega.utils.pose_enc import encoding_to_camera
-from vggt_omega.utils.scenes import adjusted_rand_index, as_4x4
+from vggt_omega.utils.scenes import as_4x4, partition_scores
 
 POSE_KEYS = ("rotation_deg", "translation_deg", "rra_5", "rra_15", "rta_5", "rta_15", "auc_30")
 DEPTH_KEYS = ("abs_rel", "delta125", "abs_rel_raw")
 
 
-def clustering_scores(prediction: dict, scene_id: torch.Tensor, threshold: float = 0.5) -> dict[str, float]:
-    """Pair F1, pair agreement, ARI, exact partition and scene-count error, for final and route groups."""
-    scene_id = scene_id.view(-1).cpu()
-    num_frames = scene_id.shape[0]
-    off = ~torch.eye(num_frames, dtype=torch.bool)
-    target_same = (scene_id[:, None] == scene_id[None, :])[off]
-    scores = {}
-    for prefix, affinity_key, group_key in (
-        ("", "affinity", "group_id"),
-        ("route_", "route_affinity", "route_group_id"),
-    ):
-        if affinity_key not in prediction:
-            continue
-        affinity = prediction[affinity_key].reshape(num_frames, num_frames).float().cpu()
-        groups = prediction[group_key].reshape(num_frames).cpu()
-        predicted_same = (affinity >= threshold)[off]
-        true_positive = (predicted_same & target_same).sum().float()
-        precision = true_positive / predicted_same.sum().clamp(min=1).float()
-        recall = true_positive / target_same.sum().clamp(min=1).float()
-        group_same = (groups[:, None] == groups[None, :])[off]
-        scores[f"{prefix}affinity_f1"] = float(2 * precision * recall / (precision + recall).clamp(min=1e-6))
-        scores[f"{prefix}group_agreement"] = float((group_same == target_same).float().mean())
-        scores[f"{prefix}ari"] = adjusted_rand_index(groups, scene_id)
-        scores[f"{prefix}exact_partition"] = float(bool((group_same == target_same).all()))
-        scores[f"{prefix}scene_count_error"] = float(abs(groups.unique().numel() - scene_id.unique().numel()))
+def clustering_scores(prediction: dict, scene_id: torch.Tensor) -> dict[str, float]:
+    """Partition scores of the final groups, and `route_*` scores of the route groups."""
+    scores = partition_scores(prediction["group_id"], scene_id)
+    if "route_group_id" in prediction:
+        scores.update({f"route_{key}": value for key, value in partition_scores(prediction["route_group_id"], scene_id).items()})
     return scores
 
 
@@ -108,12 +88,12 @@ def depth_scores(predicted: torch.Tensor, target: torch.Tensor, scene_id: torch.
     }
 
 
-def score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, threshold=0.5, min_valid=10) -> dict:
+def score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid=10) -> dict:
     extrinsics, _ = encoding_to_camera(prediction["pose_enc"], image_hw, build_intrinsics=False)
     scores = pose_scores(extrinsics[0], target_extrinsics, scene_id)
     scores.update(depth_scores(prediction["depth"], target_depth, scene_id, min_valid=min_valid))
-    if "affinity" in prediction:
-        scores.update(clustering_scores(prediction, scene_id, threshold))
+    if "group_id" in prediction:
+        scores.update(clustering_scores(prediction, scene_id))
     return scores
 
 
@@ -129,7 +109,6 @@ def run_systems(
     scene_id: torch.Tensor,
     target_extrinsics: torch.Tensor,
     target_depth: torch.Tensor,
-    threshold: float = 0.5,
     min_valid: int = 10,
     include_separate: bool = True,
 ) -> dict:
@@ -143,7 +122,7 @@ def run_systems(
     image_hw = tuple(images.shape[-2:])
 
     def score(prediction):
-        return score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, threshold, min_valid)
+        return score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid)
 
     systems = {
         "predicted": score(model(images)),

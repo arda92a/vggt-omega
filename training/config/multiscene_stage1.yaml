@@ -3,11 +3,10 @@
 # only supervision is "which frames share a scene".
 #
 # From the repository root:
-#   MERGED_DIR=/path/to/unified/merged \
-#   uv run python train.py --config multiscene_stage1 \
+#   uv run python train.py --config multiscene_stage1 --data-dir /path/to/unified/merged \
 #     checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt
 #
-# MERGED_DIR holds one folder per scene plus train.txt and val.txt, written by
+# The data dir (--data-dir, default $MERGED_DIR) holds one folder per scene plus train.txt and val.txt, written by
 # training/dataset_preparation/split_sequences.py. Validation reads val.txt only.
 # Offline wandb: logging.wandb_writer.mode=offline. Off: logging.wandb_writer.enabled=false.
 
@@ -139,25 +138,17 @@ logging:
     entity: null
     mode: online
     dir: logs/${exp_name}/wandb
-    step_freq: 10
+  # Epoch averages shown on wandb under train/. Validation metrics are chosen in train_utils/report.py.
   scalar_keys_to_log:
     train:
       keys_to_log:
         - loss_objective
-        - loss_affinity
-        - loss_affinity_final
-        - loss_affinity_route
-        - affinity_f1
-        - route_f1
-        - group_agreement
-        - route_group_agreement
         - ari
+        - perfect_bags
+        - pair_acc
+        - count_acc
+        - separated
+        - together
         - route_ari
-        - exact_partition
-        - route_exact_partition
-        - scene_count_error
-        - route_scene_count_error
         - num_scenes
-        - num_frames
         - gt_group_prob
-        - used_gt_groups

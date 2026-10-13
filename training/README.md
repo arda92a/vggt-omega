@@ -157,7 +157,7 @@ Design and metrics are in [`Multi_Scene_VGGT_Omega/plan.tex`](../Multi_Scene_VGG
 Run from the repository root:
 
 ```bash
-export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*, in the unified layout
+export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*; train.py also takes --data-dir
 uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 6   # writes train.txt, val.txt
 uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
 uv run python train.py --config multiscene_stage2 \
@@ -171,7 +171,7 @@ uv run python training/multiscene_smoke.py                                      
 Any hydra override can follow, for example `max_epochs=1`, `~data.train.dataset.dataset_configs.eden`, or
 `logging.wandb_writer.mode=offline` (`enabled=false` turns wandb off; run `wandb login` once otherwise).
 
-Wandb panels: `train_step/*` per step, `train/*` and `val/*` per epoch, plus an affinity heat-map. Validation runs
+Wandb panels: `train/*` and `val/*`, one point per epoch, plus an affinity heat-map. Validation runs
 before training and after every epoch on a held-out scenes (`val.txt`) and reports the `predicted`, `oracle`
 and `plain` systems (`val/<system>/<metric>`), and the gaps `val/contamination/*` and `val/cluster_gap/*`.
 Metrics: `ari`, `exact_partition`, `affinity_f1`, `rotation_deg`, `rra_15`, `rta_15`, `auc_30`, `abs_rel`, `delta125`.

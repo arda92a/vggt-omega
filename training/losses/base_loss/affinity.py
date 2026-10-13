@@ -1,15 +1,17 @@
-"""Affinity loss and clustering metrics.
+"""Affinity loss and the grouping metrics logged with it.
 
 The loss is a class-balanced BCE over off-diagonal pairs. With S scenes only 1/S of the
 pairs are positive, and the diagonal is always 1, so a plain mean rewards "everything is
 the same scene". The route head (middle layer) and the final head are supervised
 separately, and optionally the final head again after scene attention.
+
+The metrics come from the hard groups the model would use, not from the soft affinity.
 """
 
 import torch
 import torch.nn.functional as F
 
-from vggt_omega.utils.scenes import adjusted_rand_index
+from vggt_omega.utils.scenes import partition_scores
 
 
 def compute_affinity_loss(
@@ -34,8 +36,6 @@ def compute_affinity_loss(
     logs = {
         "loss_affinity_final": final_loss.detach(),
         "loss_affinity_route": route_loss.detach(),
-        "affinity_f1": _off_diagonal_f1(predictions["affinity"], target),
-        "route_f1": _off_diagonal_f1(predictions["route_affinity"], target),
     }
     if include_output:
         if "affinity_output_logits" not in predictions:
@@ -43,13 +43,11 @@ def compute_affinity_loss(
         output_loss = balanced_bce(predictions["affinity_output_logits"], target)
         total = total + output_loss
         logs["loss_affinity_output"] = output_loss.detach()
-        logs["affinity_output_f1"] = _off_diagonal_f1(predictions["affinity_output"], target)
     logs["loss_affinity"] = total
 
     if "scene_id" in batch:
-        for name, key in (("", "group_id"), ("route_", "route_group_id")):
-            if key in predictions:
-                logs.update(_partition_scores(predictions[key], batch["scene_id"], prefix=name))
+        logs.update(_group_metrics(predictions["group_id"], batch["scene_id"], prefix=""))
+        logs.update(_group_metrics(predictions["route_group_id"], batch["scene_id"], prefix="route_"))
     return logs
 
 
@@ -64,32 +62,12 @@ def balanced_bce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return torch.stack(terms).mean()
 
 
-def _off_diagonal_f1(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    off = ~torch.eye(prediction.shape[-1], device=prediction.device, dtype=torch.bool)
-    predicted_same = (prediction >= 0.5)[:, off]
-    target_same = (target >= 0.5)[:, off]
-    true_positive = (predicted_same & target_same).sum().float()
-    precision = true_positive / predicted_same.sum().clamp(min=1).float()
-    recall = true_positive / target_same.sum().clamp(min=1).float()
-    return (2 * precision * recall / (precision + recall).clamp(min=1e-6)).detach()
-
-
 @torch.no_grad()
-def _partition_scores(group_id: torch.Tensor, scene_id: torch.Tensor, prefix: str) -> dict:
-    """Pair agreement, ARI, exact partition rate, and scene-count error of predicted groups."""
-    num_frames = group_id.shape[-1]
-    off = ~torch.eye(num_frames, device=group_id.device, dtype=torch.bool)
-    predicted_same = group_id[:, :, None] == group_id[:, None, :]
-    target_same = scene_id[:, :, None] == scene_id[:, None, :]
-    rows = range(group_id.shape[0])
-    ari = [adjusted_rand_index(group_id[row].cpu(), scene_id[row].cpu()) for row in rows]
-    count_error = [
-        abs(int(group_id[row].unique().numel()) - int(scene_id[row].unique().numel())) for row in rows
-    ]
-    exact = [float((predicted_same[row] == target_same[row]).all()) for row in rows]
-    return {
-        f"{prefix}group_agreement": (predicted_same == target_same)[:, off].float().mean(),
-        f"{prefix}ari": torch.tensor(sum(ari) / len(ari)),
-        f"{prefix}exact_partition": torch.tensor(sum(exact) / len(exact)),
-        f"{prefix}scene_count_error": torch.tensor(sum(count_error) / len(count_error)),
-    }
+def _group_metrics(group_id: torch.Tensor, scene_id: torch.Tensor, prefix: str) -> dict:
+    """Bag-averaged partition scores. A score a bag cannot define is left out of its average."""
+    rows = [partition_scores(group_id[row], scene_id[row]) for row in range(group_id.shape[0])]
+    metrics = {}
+    for name in {key for row in rows for key in row}:
+        values = [row[name] for row in rows if name in row]
+        metrics[f"{prefix}{name}"] = torch.tensor(sum(values) / len(values))
+    return metrics

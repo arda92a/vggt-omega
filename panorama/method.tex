@@ -1,0 +1,249 @@
+\documentclass[11pt, a4paper]{article}
+
+\usepackage[a4paper, margin=2.4cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{booktabs, array, tabularx}
+\usepackage{enumitem}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black]{hyperref}
+
+\setlist{itemsep=0.2em, topsep=0.3em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+
+\newcommand{\R}{\mathbf{R}}
+\newcommand{\X}{\mathbf{X}}
+\newcommand{\bt}{\mathbf{t}}
+\newcommand{\bc}{\mathbf{c}}
+
+\title{3D-Aware Panorama Stitching with VGGT-Omega}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Idea}
+
+Classical stitching estimates 2D homographies between photos and warps them onto a common surface.
+This is exact only if the camera rotates about its optical centre or the scene is planar. A camera that
+moves, or a scene with depth, produces parallax: objects at different distances shift by different
+amounts, and a homography cannot align them, so seams double or cut objects.
+
+Here the photos are not warped to each other. Instead:
+\begin{enumerate}
+  \item VGGT-Omega gives every photo a camera pose, a depth map and a confidence map, so every
+        pixel becomes a point in one shared 3D space.
+  \item A virtual camera looks at this 3D scene, and the panorama is its image.
+  \item For every panorama pixel, the nearest 3D surface is found with a z-buffer, and the colour is
+        read back from the original photos that actually see that surface.
+\end{enumerate}
+Parallax is resolved by the z-buffer (the nearest surface wins), not by an image warp. The colour always
+comes from the original photos, so the output is as sharp as the photos, not as sharp as the model input.
+
+\begin{verbatim}
+photos --> VGGT-Omega --> pose, depth, confidence, sky mask
+       --> 3D points --> virtual camera + canvas layout
+       --> z-buffer (nearest surface per canvas pixel)
+       --> backward lookup in every photo + visibility test
+       --> exposure gains --> blend (multiband) --> gap fill --> RGBA panorama
+\end{verbatim}
+
+\section{Reconstruction}
+
+The $N$ photos are resized to a model resolution (long side 512~px, multiple of 16) and passed to VGGT-Omega
+in one batch. For photo $i$ the model returns:
+\begin{itemize}
+  \item extrinsics $(\R_i, \bt_i)$ (camera-from-world) and intrinsics $\mathbf{K}_i$ from the pose encoding,
+  \item a depth map $d_i(u,v)$ (z-depth along the optical axis) and a confidence map $c_i(u,v) \ge 1$.
+\end{itemize}
+Further per-pixel masks:
+\begin{itemize}
+  \item \textbf{Depth edges.} A pixel is dropped if the depth range in its $3\times3$ neighbourhood exceeds 5\,\%
+        of its depth. These ``flying pixels'' lie between a foreground and a background surface and
+        belong to neither.
+  \item \textbf{Sky.} An ONNX sky segmenter marks sky pixels. Sky has no valid depth.
+\end{itemize}
+Depth, confidence and masks are resampled to the colour resolution (long side 1600~px, taken from the
+original photo), and $\mathbf{K}_i$ is scaled accordingly. All photos must share one size and orientation.
+
+A pixel $(u,v)$ with depth $d$ is lifted to a world point
+\begin{equation}
+  \X = \R_i^{\top}\!\left( d\,\mathbf{K}_i^{-1}[u,\,v,\,1]^{\top} - \bt_i \right),
+  \qquad \bc_i = -\R_i^{\top}\bt_i .
+\end{equation}
+Sky pixels have no depth, so they are placed at a fixed very large distance $D_\infty = 10^3 \cdot d_{\mathrm{med}}$
+($d_{\mathrm{med}}$ is the median scene depth) along their viewing ray. They then behave like points at infinity:
+a rotation-only panorama, with no parallax.
+
+Every other pixel takes part only if its confidence reaches $\tau_i = \max(q_{15}(c_i),\,1)$, where $q_{15}$ is the 15th
+percentile of that photo's confidence, and it is not a depth edge.
+
+\section{Virtual camera and canvas}
+
+The canvas is the image of a virtual camera. Two kinds are supported. The choice depends on how the
+photographer moved.
+
+\subsection{Perspective canvas (camera that turns)}
+
+A pinhole camera is placed at the mean of the camera centres $\bc_i$. Its frame $\R_p$ has $y$ pointing down
+(opposite to the mean camera up vector) and $z$ along the mean horizontal viewing direction of the points
+(a circular mean of their longitudes). For a world point $\X$:
+\begin{equation}
+  [x_p, y_p, z_p]^{\top} = \R_p (\X - \bc),
+  \qquad a = \frac{x_p}{z_p}, \quad b = -\frac{y_p}{z_p},
+  \qquad u = (a - a_{\min})\,s, \quad v = (b_{\max} - b)\,s .
+\end{equation}
+This is a standard perspective image, so every straight line in the scene stays straight. The scale $s$ is the
+mean focal length in pixels (times a user factor), which keeps the detail of the photos at the canvas centre.
+Directions with $z_p/\|\X - \bc\| \le 0.1$ (more than about $84^\circ$ off the axis) are off the canvas.
+The extent $a_{\min}, a_{\max}, b_{\min}, b_{\max}$ is the 0.1--99.9 percentile range of all point coordinates plus 1\,\%,
+so the canvas is cropped to what the photos cover. The canvas is limited to 50 megapixels.
+
+Limitation: pixels near the border are stretched by $1/\cos^2\theta$ ($\theta$ = angle to the axis), so this mode suits
+sets that cover less than about $120^\circ$ horizontally.
+
+\subsection{Plane canvas (camera that walks along a plane)}
+
+For shelves, walls and facades the camera translates, and one pinhole viewpoint would foreshorten the plane
+and stretch its far end. Instead the dominant plane is fitted and viewed straight on with an \emph{orthographic} camera.
+
+\textbf{Plane fit.} The points of all photos (sky excluded) go into a RANSAC search (400 hypotheses from 3 random points of a
+30\,000-point sample) with inlier tolerance $0.03\,d_{\mathrm{med}}$. A candidate whose normal is more than
+$60^\circ$ from the mean viewing direction is rejected, so a floor or ceiling cannot beat the wall in front. The best plane is refined
+three times on its inliers: the centroid is the new plane point, and the normal is the eigenvector of the
+$3\times3$ covariance with the smallest eigenvalue. If fewer than 15\,\% of the points are inliers, the mode stops
+with an error, since there is no dominant plane.
+
+\textbf{Frame.} The normal $\mathbf{n}$ is oriented towards the cameras, and the viewing direction is $\mathbf{f} = -\mathbf{n}$.
+The up axis $\mathbf{u}$ is the mean camera up vector projected into the plane, and $\mathbf{r} = \mathbf{f}\times\mathbf{u}$.
+With the plane point $\mathbf{o}$:
+\begin{equation}
+  a = (\X-\mathbf{o})\cdot\mathbf{r}, \qquad b = (\X-\mathbf{o})\cdot\mathbf{u}, \qquad \delta = (\X-\mathbf{o})\cdot\mathbf{f},
+\end{equation}
+and $u, v$ follow as above with a constant scale $s$ (pixels per world unit). Here $\delta$ is the depth used by the
+z-buffer. Since $s$ is constant, one pixel covers the same patch of the plane everywhere and nothing stretches towards the edges.
+$s$ is chosen so that one source pixel on the plane covers one canvas pixel: $s = 1/\mathrm{median}(d/f_{\mathrm{px}})$ over the inliers.
+Objects in front of the plane still land on the right layer because of the z-buffer.
+
+\section{Z-buffer}
+
+Every usable source pixel of every photo is projected onto the canvas, which gives a canvas position and a depth
+(distance to the virtual camera in perspective, $\delta$ in plane mode). Each canvas pixel keeps the \emph{minimum} depth
+that reaches it, so the nearest surface wins whichever photo saw it.
+
+Because a source pixel can cover more than one canvas pixel, it is drawn as a square of radius
+$\rho = \mathrm{clip}\!\left(\lceil (1.5\,s_{\mathrm{px}} - 1)/2 \rceil,\,0,\,4\right)$, where $s_{\mathrm{px}}$ is the number of canvas pixels one
+source pixel covers: $s\,(d/f_{\mathrm{px}})/(D\,z_p^2)$ in perspective ($D$ = distance to the virtual camera) and $s\,(d/f_{\mathrm{px}})$ in plane mode.
+Remaining one- or two-pixel holes are closed by two $5\times5$ min-dilations of the depth map.
+
+Larger empty areas (a region that was masked out in every photo) keep no depth. For the lookup in the next step only, their depth is filled
+with the average log-depth of valid neighbours (box filters with radii 4, 8, \dots, 256). Such pixels count as ``no strict match''
+below.
+
+\section{Colour lookup and visibility}
+
+For each canvas pixel with depth $z$, the 3D point $\X$ is reconstructed and projected into every photo $i$:
+$\mathbf{x}_i = \mathbf{K}_i(\R_i \X + \bt_i)$ with camera depth $\hat z_i$. The colour is sampled \emph{bilinearly from the original photo}
+(backward warping), and depth, confidence, sky and edge are sampled nearest. Photo $i$ is a \emph{strict} observer of the pixel if
+\begin{equation}
+  \mathbf{x}_i \text{ lies inside the photo}, \quad |d_i(\mathbf{x}_i) - \hat z_i| \le 0.08\,\hat z_i, \quad c_i(\mathbf{x}_i) \ge \tau_i, \quad \text{not sky, not edge},
+\end{equation}
+that is, the photo sees \emph{the same surface} that the z-buffer chose. A photo that sees something nearer
+(an occluder) or farther is rejected for this pixel. For sky pixels (depth $\ge D_\infty/2$) the test is just ``the photo marks this pixel as sky''.
+
+Each strict observer gets the weight
+\begin{equation}
+  w_i = \bigl(\mathrm{clip}\bigl(\tfrac{c_i - 1}{c^{90}_i - 1},\,0,\,1\bigr) + 0.05\bigr)\cdot \mathrm{smoothstep}\!\bigl(\tfrac{\text{border distance}}{0.2\cdot\min(H,W)}\bigr),
+\end{equation}
+where $c^{90}_i$ is the 90th percentile of the photo's confidence. Confident pixels count more, and weights fall to zero smoothly
+at the photo border so that seams do not sit on image edges. Sky pixels get a fixed confidence of 0.5.
+
+\section{Exposure matching}
+
+Photos taken a moment apart can differ in exposure and white balance. Per photo and colour channel a gain $g_i$ is
+estimated on a low-resolution probe render (at most 1200~px wide), over the pixels that at least one other photo also observes:
+\begin{equation}
+  g_i = \frac{\sum_p w_{ip}\,\bar I_{-i}(p)}{\sum_p w_{ip}\,I_i(p)},
+  \qquad \bar I_{-i}(p) = \frac{\sum_{j\ne i} w_{jp}\,g_j I_j(p)}{\sum_{j\ne i} w_{jp}} .
+\end{equation}
+Three rounds are run, the gains are divided by their mean over photos, and clipped to $[0.5, 2]$. The gains are applied at
+render time, so the original pixels are not altered.
+
+\section{Blending}
+
+\textbf{Multiband mode (default).} Averaging all observers blurs fine detail when two photos are slightly misaligned, because two copies of the same
+edge are mixed. Multiband blending avoids this by choosing one photo per pixel and hiding the seam in a pyramid:
+\begin{enumerate}
+  \item Each weight map is smoothed with a Gaussian of $\sigma = \max(3,\,0.01\min(H,W))$. Each pixel is assigned to the strict
+        observer with the highest smoothed weight, which gives a hard label map $M_i$.
+  \item Every photo (after its gain) gets a Laplacian pyramid $L_k(I_i)$ and its mask a Gaussian pyramid $G_k(M_i)$, with
+        $K = \min(6,\,\max(1,\lfloor\log_2(\min(H,W)/24)\rfloor))$ levels. Where a photo has no valid content it is painted
+        with the plain weighted average, so no black bleeds into the bands.
+  \item Each level is combined as $B_k = \sum_i L_k(I_i)\,G_k(M_i) \big/ \sum_i G_k(M_i)$ and the pyramid is collapsed.
+\end{enumerate}
+Low frequencies therefore blend over a wide band (no visible brightness step), and fine detail blends over a narrow band, so each edge comes from a single photo.
+
+\textbf{Average mode.} The weighted average $\sum_i w_i g_i I_i / \sum_i w_i$. It is used instead of multiband if photos
+$\times$ canvas pixels exceeds $1.5\cdot 10^8$.
+
+\section{Gap filling}
+
+If no photo passes the strict test at a pixel (all observers are masked by confidence, edge or depth disagreement), it would stay empty
+although some photo does see that direction. For these pixels only, a fallback colour is used: any photo whose image contains the
+pixel contributes with its border weight, \emph{without} the depth, confidence and edge tests. The fallback is accumulated separately
+from the strict result, so it never dilutes a pixel that has a strict match. Such pixels are reported as \texttt{filled\_from\_fallback}.
+
+What is still empty (outside every photo, such as the corners of a perspective canvas) is left transparent. Gaps up to a few pixels wide are closed by a
+$5\times5$ morphological closing and Telea inpainting. The result is saved as an RGBA PNG whose alpha is 0 where no photo covers the canvas.
+
+\section{Parameters}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Effect} \\
+\midrule
+projection & perspective & \texttt{perspective} for a camera that turns, \texttt{plane} for one that walks along a wall or shelf \\
+scale & 1.0 & Canvas pixels per source pixel at the canvas centre (1.0 keeps the photo detail) \\
+blend & multiband & \texttt{multiband} or \texttt{average} \\
+fill\_gaps & on & Fallback colour where no photo passes the strict tests \\
+conf\_percentile & 15 & Share of the least confident pixels of each photo that is dropped \\
+depth\_tolerance & 0.08 & Relative depth disagreement that still means ``same surface'' \\
+feather & 0.2 & Border ramp, as a fraction of the shorter photo side \\
+edge\_rtol & 0.05 & Depth range in a $3\times3$ window (relative) above which a pixel is a flying pixel \\
+exposure & on & Per-photo, per-channel gain \\
+use\_sky & on & Place sky at a very large distance \\
+max\_megapixels & 50 & Canvas size cap \\
+model resolution & 512 & Long side of the network input \\
+colour resolution & 1600 & Long side of the photos used for colour \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Limitations}
+
+\begin{itemize}
+  \item \textbf{Accuracy is bounded by the model.} Pose and depth come from a $512$~px network pass. A pose error of a fraction of a degree
+        or a depth error on a thin object shows up as a small misalignment or ghosting. Nothing in the current pipeline
+        corrects the model output with the photos.
+  \item \textbf{Fallback pixels are less reliable.} They skip the depth test, so near objects seen from different positions can ghost there.
+        Switch \texttt{fill\_gaps} off to see how many pixels depend on it.
+  \item \textbf{Perspective mode} stretches the borders beyond about $120^\circ$ of horizontal view and fails beyond $170^\circ$. Use plane mode for a walking camera.
+  \item \textbf{Plane mode} assumes one dominant plane that faces the cameras. Corners, corridors and scenes without a plane are not supported and give an error.
+  \item \textbf{No lens model.} The pinhole camera of the network is used as is. Visible lens distortion is not corrected.
+  \item \textbf{Moving objects} appear in one photo only or in several positions. The pipeline does not detect motion.
+  \item \textbf{All photos must have the same size and orientation.}
+\end{itemize}
+
+\section{Code}
+
+\begin{itemize}
+  \item \texttt{panorama/stitch.py}: reconstruction, layouts, z-buffer, lookup, exposure, blending, gap filling.
+  \item \texttt{panorama/app.py}: Gradio interface. The model output of a photo set is cached, so changing render options re-renders in seconds without running the network.
+  \item \texttt{panorama/test\_panorama.py}: synthetic checks on a textured sphere and a textured wall.
+\end{itemize}
+
+\end{document}

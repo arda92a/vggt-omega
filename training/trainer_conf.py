@@ -75,3 +75,5 @@ class TrainerLoggingConf:
     scalar_keys_to_log: Optional[Dict[str, Any]] = None
     all_ranks: bool = False
     wandb_writer: Any = None
+    # Without a terminal, print one progress line every this many steps.
+    console_every: int = 100

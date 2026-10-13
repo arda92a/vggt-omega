@@ -72,33 +72,17 @@ logging:
     train:
       keys_to_log:
         - loss_objective
-        - loss_affinity
-        - loss_affinity_final
-        - loss_affinity_route
-        - loss_affinity_output
-        - affinity_f1
-        - affinity_output_f1
-        - route_f1
         - ari
+        - perfect_bags
+        - pair_acc
+        - count_acc
+        - separated
+        - together
         - route_ari
-        - exact_partition
-        - scene_count_error
         - num_scenes
-        - num_frames
         - gt_group_prob
-        - used_gt_groups
         - loss_camera
-        - loss_T
-        - loss_R
-        - loss_FL
-        - loss_PW
-        - Rac_5
-        - Rac_15
-        - Tac_5
-        - Tac_15
-        - Auc_30
         - loss_depth
-        - abs_rel
-        - d1
         - loss_point
-        - point_l1_unweighted
+        - Auc_30
+        - abs_rel

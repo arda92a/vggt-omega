@@ -14,21 +14,15 @@ from train_utils.distributed import get_machine_local_and_dist_rank
 
 # Best value per metric, shown in the run summary and in the runs table.
 _SUMMARY_BEST = {
-    "val/predicted/ari": "max",
-    "val/predicted/exact_partition": "max",
-    "val/predicted/auc_30": "max",
-    "val/predicted/rra_15": "max",
-    "val/predicted/abs_rel": "min",
-    "val/oracle/auc_30": "max",
-    "val/oracle/abs_rel": "min",
+    "val/ari": "max",
+    "val/perfect_bags": "max",
+    "val/auc_30": "max",
+    "val/abs_rel": "min",
 }
 
 
 class WandbLogger:
-    """Logs from rank 0. A disabled logger never imports wandb.
-
-    Three x-axes: `epoch` for `train/*` and `val/*`, `global_step` for `train_step/*`.
-    """
+    """Logs from rank 0. A disabled logger never imports wandb. Every chart uses `epoch` as its x-axis."""
 
     def __init__(
         self,
@@ -38,11 +32,10 @@ class WandbLogger:
         entity: Optional[str] = None,
         mode: str = "online",
         dir: Optional[str] = None,
-        step_freq: int = 10,
     ) -> None:
         self._run = None
         self._wandb = None
-        self.step_freq = max(1, int(step_freq))
+        self._history: dict[str, dict[str, list[float]]] = {}
         if not enabled:
             return
         _, rank = get_machine_local_and_dist_rank()
@@ -67,10 +60,8 @@ class WandbLogger:
     def _define_axes(self) -> None:
         wandb = self._wandb
         wandb.define_metric("epoch")
-        wandb.define_metric("global_step")
         wandb.define_metric("train/*", step_metric="epoch")
         wandb.define_metric("val/*", step_metric="epoch")
-        wandb.define_metric("train_step/*", step_metric="global_step")
         for key, goal in _SUMMARY_BEST.items():
             wandb.define_metric(key, step_metric="epoch", summary=goal)
 
@@ -78,15 +69,39 @@ class WandbLogger:
         if self._run is not None:
             self._run.config.update(dict(config), allow_val_change=True)
 
-    def log_epoch(self, metrics: Mapping[str, Any], epoch: int) -> None:
+    def log_epoch(
+        self,
+        metrics: Mapping[str, Any],
+        epoch: int,
+        comparisons: Optional[Mapping[str, Mapping[str, float]]] = None,
+    ) -> None:
+        """One row per epoch. `comparisons` maps a chart name to {system: value}, drawn as one overlay chart."""
         if self._run is None:
             return
-        self._run.log({**metrics, "epoch": epoch})
+        payload = {**metrics, "epoch": epoch}
+        for chart, values in (comparisons or {}).items():
+            plot = self._comparison_chart(chart, values, epoch)
+            if plot is not None:
+                payload[f"val/{chart}"] = plot
+        self._run.log(payload)
 
-    def log_step(self, metrics: Mapping[str, Any], step: int) -> None:
-        if self._run is None or step % self.step_freq != 0:
-            return
-        self._run.log({**metrics, "global_step": step})
+    def _comparison_chart(self, chart: str, values: Mapping[str, float], epoch: int):
+        if not values:
+            return None
+        history = self._history.setdefault(chart, {"epoch": []})
+        history["epoch"].append(epoch)
+        for system, value in values.items():
+            history.setdefault(system, []).append(value)
+        systems = [name for name in history if name != "epoch"]
+        if any(len(history[name]) != len(history["epoch"]) for name in systems):
+            return None
+        return self._wandb.plot.line_series(
+            xs=history["epoch"],
+            ys=[history[name] for name in systems],
+            keys=systems,
+            title=chart,
+            xname="epoch",
+        )
 
     def log_affinity(self, matrices: Mapping[str, np.ndarray], epoch: int) -> None:
         """Log affinity matrices of one validation bag side by side as one image."""

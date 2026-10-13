@@ -13,14 +13,15 @@ os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
 import contextlib
 import gc
+import json
 import logging
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import torch
-from tqdm.auto import tqdm
 import torch.distributed as dist
 import torch.nn as nn
 from hydra.utils import instantiate
@@ -35,6 +36,7 @@ from train_utils.checkpoint import (
     move_optimizer_state_to_device,
     restore_optimizer_state,
 )
+from train_utils.console import Progress
 from train_utils.distributed import (
     get_machine_local_and_dist_rank,
     setup_distributed_backend,
@@ -51,14 +53,13 @@ from train_utils.fsdp import (
 from train_utils.general import (
     AverageMeter,
     DurationMeter,
-    ProgressMeter,
     copy_data_to_device,
     get_amp_type,
     get_resume_checkpoint,
-    human_readable_time,
     makedir,
     set_seeds,
 )
+from train_utils import report
 from train_utils.logging import setup_logging
 from train_utils.optimizer import construct_optimizers
 from trainer_conf import (
@@ -436,12 +437,57 @@ class Trainer:
         torch.cuda.empty_cache()
 
     def run(self):
+        self._log_data_summary()
         if self.epoch > 0:
             logging.info(f"Resuming training from epoch {self.epoch}")
         if self.eval_only:
-            self._log_validation(self.run_validation(self.epoch), self.epoch)
+            started = time.time()
+            metrics = self.run_validation(self.epoch)
+            self._report_epoch(self.epoch, val=metrics, val_seconds=time.time() - started, title="validation only")
             return
         self.run_train()
+
+    def _scene_counts(self, loader_dataset) -> Dict[str, tuple]:
+        """Per source (scene name before the first underscore): number of scenes and frames."""
+        counts: Dict[str, tuple] = {}
+        for base in loader_dataset.dataset.base_dataset.datasets:
+            root = getattr(base, "UNIFIED_DIR", None)
+            names_file = getattr(base, "image_names_filename", "image_names.json")
+            for name in getattr(base, "sequence_list", ()):
+                with open(Path(root) / name / names_file) as handle:
+                    frames = len(json.load(handle))
+                scenes, total = counts.get(name.split("_")[0], (0, 0))
+                counts[name.split("_")[0]] = (scenes + 1, total + frames)
+        return counts
+
+    def _log_data_summary(self) -> None:
+        if self.rank != 0:
+            return
+        try:
+            splits = {"train": self._scene_counts(self.train_dataset)}
+            if self.val_dataset is not None:
+                splits["val"] = self._scene_counts(self.val_dataset)
+        except (OSError, ValueError, AttributeError) as error:
+            logging.warning(f"Could not summarize the data: {error}")
+            return
+        roots = [
+            str(getattr(base, "UNIFIED_DIR", ""))
+            for base in self.train_dataset.dataset.base_dataset.datasets
+        ]
+        bags = {
+            "train": OmegaConf.to_container(self.data_conf.train.get("mixed_scene") or OmegaConf.create({})),
+            "val": OmegaConf.to_container(self.validation_conf.get("mixed_scene") or OmegaConf.create({})),
+        }
+        logging.info(report.format_data_summary(roots, splits, bags))
+        if self.wandb_writer is not None:
+            self.wandb_writer.update_config(
+                {
+                    "data_summary": {
+                        split: {source: {"scenes": scenes, "frames": frames} for source, (scenes, frames) in sources.items()}
+                        for split, sources in splits.items()
+                    }
+                }
+            )
 
     def _setup_dataloaders(self):
         self.train_dataset = instantiate(self.data_conf.train, _recursive_=False)
@@ -463,26 +509,43 @@ class Trainer:
         every = int(self.validation_conf.get("every_n_epochs", 1))
         return (int(self.epoch) + 1) % every == 0 or int(self.epoch) + 1 == self.max_epochs
 
-    def _progress(self, iterable, total, desc):
-        """Rank 0 progress bar. Other ranks iterate the loader unchanged."""
-        if self.rank != 0:
-            return iterable
-        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True, leave=True, mininterval=0.5)
+    def _progress(self, total: int, desc: str) -> Progress:
+        """Rank 0 shows progress. A terminal gets a bar, a log file gets a line every `console_every` steps."""
+        every = int(getattr(self.logging_conf, "console_every", 100))
+        return Progress(total, desc, enabled=self.rank == 0, every=every)
 
     @staticmethod
-    def _meter_postfix(meters) -> Dict[str, str]:
+    def _running_averages(meters) -> Dict[str, float]:
         shown = {}
         for label, name in (
             ("loss", "train_loss_objective"),
-            ("f1", "train_affinity_f1"),
-            ("route", "train_route_f1"),
-            ("ari", "train_ari"),
-            ("exact", "train_exact_partition"),
+            ("ARI", "train_ari"),
+            ("perfect bags", "train_perfect_bags"),
+            ("pairs right", "train_pair_acc"),
         ):
             meter = meters.get(name)
             if meter is not None and meter.count:
-                shown[label] = f"{meter.avg:.3f}"
+                shown[label] = meter.avg
         return shown
+
+    @staticmethod
+    def _stop_workers(iterator) -> None:
+        """Stop the workers of a loader iterator that is left early, before it is garbage collected."""
+        shutdown = getattr(iterator, "_shutdown_workers", None)
+        if shutdown is None:
+            return
+        try:
+            shutdown()
+        except RuntimeError as error:
+            logging.warning(f"A data worker exited abnormally while the loader was closed: {error}")
+
+    @contextlib.contextmanager
+    def _worker_scope(self, loader):
+        iterator = iter(loader)
+        try:
+            yield iterator
+        finally:
+            self._stop_workers(iterator)
 
     @torch.no_grad()
     def run_validation(self, epoch: int) -> Dict[str, float]:
@@ -501,47 +564,47 @@ class Trainer:
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
         first_bag = None
-        loader = self.val_dataset.get_loader(epoch=0)
-        desc = "val before training" if epoch < 0 else f"val {int(epoch) + 1}/{self.max_epochs}"
-        progress = self._progress(loader, num_batches, desc)
-        for index, batch in enumerate(progress):
-            if index >= num_batches:
-                break
-            batch = copy_data_to_device(batch, self.device, non_blocking=True)
-            for row in range(batch["images"].shape[0]):
-                with torch.autocast(
-                    device_type="cuda",
-                    enabled=self.optim_conf.amp.enabled,
-                    dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
-                ):
-                    try:
-                        report = run_systems(
-                            model,
-                            batch["images"][row],
-                            batch["scene_id"][row],
-                            batch["extrinsics"][row],
-                            batch["depths"][row],
-                            threshold=model.multiscene.threshold,
-                            include_separate=include_separate,
-                        )
-                    except ValueError as error:
-                        logging.warning(f"Skipping validation bag: {error}")
-                        continue
-                for system, scores in report.items():
-                    for key, value in scores.items():
-                        name = f"{system}/{key}"
-                        sums[name] = sums.get(name, 0.0) + float(value)
-                        counts[name] = counts.get(name, 0) + 1
-                sums["stats/num_scenes"] = sums.get("stats/num_scenes", 0.0) + float(batch["num_scenes"][row])
-                counts["stats/num_scenes"] = counts.get("stats/num_scenes", 0) + 1
-                if first_bag is None and self.rank == 0:
-                    first_bag = (batch["images"][row], batch["scene_id"][row])
-            ari_count = counts.get("predicted/ari", 0)
-            if ari_count and hasattr(progress, "set_postfix"):
-                progress.set_postfix(ari=f"{sums['predicted/ari'] / ari_count:.3f}", refresh=False)
-        if hasattr(progress, "close"):
-            progress.close()
-        del loader
+        desc = "validation" if epoch < 0 else f"validation {int(epoch) + 1}/{self.max_epochs}"
+        progress = self._progress(num_batches, desc)
+        with self._worker_scope(self.val_dataset.get_loader(epoch=0)) as batches:
+            for index, batch in enumerate(batches):
+                if index >= num_batches:
+                    break
+                batch = copy_data_to_device(batch, self.device, non_blocking=True)
+                for row in range(batch["images"].shape[0]):
+                    with torch.autocast(
+                        device_type="cuda",
+                        enabled=self.optim_conf.amp.enabled,
+                        dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
+                    ):
+                        try:
+                            by_system = run_systems(
+                                model,
+                                batch["images"][row],
+                                batch["scene_id"][row],
+                                batch["extrinsics"][row],
+                                batch["depths"][row],
+                                include_separate=include_separate,
+                            )
+                        except ValueError as error:
+                            logging.warning(f"Skipping validation bag: {error}")
+                            continue
+                    for system, scores in by_system.items():
+                        for key, value in scores.items():
+                            name = f"{system}/{key}"
+                            sums[name] = sums.get(name, 0.0) + float(value)
+                            counts[name] = counts.get(name, 0) + 1
+                    sums["stats/num_scenes"] = sums.get("stats/num_scenes", 0.0) + float(batch["num_scenes"][row])
+                    counts["stats/num_scenes"] = counts.get("stats/num_scenes", 0) + 1
+                    if first_bag is None and self.rank == 0:
+                        first_bag = (batch["images"][row], batch["scene_id"][row])
+                running = {
+                    name: sums[f"predicted/{key}"] / counts[f"predicted/{key}"]
+                    for name, key in (("ARI", "ari"), ("perfect bags", "perfect_bags"))
+                    if counts.get(f"predicted/{key}")
+                }
+                progress.step(index + 1, running)
+        progress.close()
 
         gathered = [None] * dist.get_world_size()
         dist.all_gather_object(gathered, (sums, counts))
@@ -576,19 +639,28 @@ class Trainer:
             epoch,
         )
 
-    def _log_validation(self, metrics: Dict[str, float], epoch: int) -> None:
+    def _report_epoch(
+        self,
+        epoch: int,
+        train: Optional[Dict[str, float]] = None,
+        val: Optional[Dict[str, float]] = None,
+        train_seconds: float = 0.0,
+        val_seconds: float = 0.0,
+        title: Optional[str] = None,
+    ) -> None:
+        """Print one block and write one wandb row for the epoch. Epoch -1 is the untrained baseline."""
         if self.rank != 0:
             return
-        payload = {f"val/{name}": value for name, value in metrics.items()}
-        summary = ", ".join(
-            f"{name}={value:.4f}"
-            for name, value in payload.items()
-            if name.startswith(("val/predicted/", "val/oracle/"))
-            and name.rsplit("/", 1)[1] in ("ari", "auc_30", "abs_rel", "affinity_f1")
+        eta = max(0, self.max_epochs - epoch - 1) * (train_seconds + val_seconds)
+        logging.info(
+            report.format_epoch(epoch, self.max_epochs, train, val, train_seconds, val_seconds, eta, title=title)
         )
-        logging.info(f"Epoch [{epoch}] validation: {summary}")
-        if self.wandb_writer is not None:
-            self.wandb_writer.log_epoch(payload, epoch)
+        if self.wandb_writer is None:
+            return
+        payload = report.train_scalars(train) if train else {}
+        if val:
+            payload.update(report.val_scalars(val))
+        self.wandb_writer.log_epoch(payload, epoch, report.val_comparisons(val) if val else None)
 
     def run_train(self):
         if (
@@ -596,7 +668,9 @@ class Trainer:
             and self.validation_conf.get("at_start", True)
             and self.epoch == self.start_epoch
         ):
-            self._log_validation(self.run_validation(self.start_epoch - 1), self.start_epoch - 1)
+            started = time.time()
+            baseline = self.run_validation(self.start_epoch - 1)
+            self._report_epoch(self.start_epoch - 1, val=baseline, val_seconds=time.time() - started)
         while self.epoch < self.max_epochs:
             set_seeds(self.seed_value + self.epoch*100, self.max_epochs, self.rank)
             gc.collect()
@@ -604,12 +678,18 @@ class Trainer:
             torch.cuda.reset_peak_memory_stats()
 
             dataloader = self.train_dataset.get_loader(epoch=int(self.epoch))
-            self.train_epoch(dataloader)
+            started = time.time()
+            train_metrics = self.train_epoch(dataloader)
+            train_seconds = time.time() - started
 
             dist.barrier()
             self.save_checkpoint(self.epoch)
+            val_metrics, val_seconds = None, 0.0
             if self._validation_due():
-                self._log_validation(self.run_validation(int(self.epoch)), int(self.epoch))
+                started = time.time()
+                val_metrics = self.run_validation(int(self.epoch))
+                val_seconds = time.time() - started
+            self._report_epoch(int(self.epoch), train_metrics, val_metrics, train_seconds, val_seconds)
 
             del dataloader
             gc.collect()
@@ -617,8 +697,8 @@ class Trainer:
             torch.cuda.reset_peak_memory_stats()
             self.epoch += 1
 
-    def train_epoch(self, train_loader):
-        logging.info(f"Train Epoch Started: [{self.epoch}]")
+    def train_epoch(self, train_loader) -> Dict[str, float]:
+        """Run one epoch and return the epoch average of every logged scalar, plus the learning rate."""
         # WARNING: These timing values are only useful as averages
         # there aren't `torch.cuda.synchronize()` calls around the timing calls
         # which means the times can undercount work from the current step while also
@@ -657,37 +737,17 @@ class Trainer:
             self.time_elapsed_meter,
             *grad_meters.values(),
         ]
-        progress = ProgressMeter(
-            num_batches=limit_train_batches,
-            meters=[
-                batch_time,
-                data_time,
-                mem,
-                self.time_elapsed_meter,
-                *scalar_meters.values(),
-                *grad_meters.values(),
-            ],
-            prefix="Train | Epoch: [{}]".format(self.epoch),
-        )
-
         self.model.train()
 
         end = time.time()
 
         iters_done = 0
-        logging.info(f"Starting training at epoch {self.epoch}")
-        train_bar = self._progress(
-            train_loader,
-            limit_train_batches,
-            f"train {int(self.epoch) + 1}/{self.max_epochs}",
-        )
-        for data_iter, batch in enumerate(train_bar):
+        train_bar = self._progress(limit_train_batches, f"train {int(self.epoch) + 1}/{self.max_epochs}")
+        batches = iter(train_loader)
+        for data_iter, batch in enumerate(batches):
             skip_step_logging = data_iter == 0
             if data_iter >= limit_train_batches:
                 break
-
-            if data_iter == 0 and self.rank == 0:
-                logging.info(f"First batch: sequences={batch['seq_name']}, datasets={batch['dataset']}")
 
             # measure data loading time
             data_loading_duration = time.time() - end
@@ -713,17 +773,12 @@ class Trainer:
             )
             for key, value in scalar_values.items():
                 scalar_meters[f"{phase}_{key}"].update(value, scalar_weights[key])
-            if hasattr(train_bar, "set_postfix"):
-                train_bar.set_postfix(self._meter_postfix(scalar_meters), refresh=False)
+            train_bar.step(data_iter + 1, self._running_averages(scalar_meters))
 
             step = self.steps[phase]
             if step % self.logging_conf.log_freq == 0 and self.rank == 0:
                 for key, value in scalar_values.items():
                     self.tb_writer.log(f"Values/{phase}/{key}", value, step)
-                if self.wandb_writer is not None:
-                    step_metrics = {f"train_step/{key}": value for key, value in scalar_values.items()}
-                    step_metrics["train_step/lr"] = self.optims[0].optimizer.param_groups[0]["lr"]
-                    self.wandb_writer.log_step(step_metrics, step)
 
             # fvcore's schedulers reject where == 1.0, so skip the final update.
             if self.schedule_progress < 1.0:
@@ -805,14 +860,6 @@ class Trainer:
             if not skip_step_logging:
                 mem.update(torch.cuda.max_memory_allocated() // 1e9)
 
-            if (
-                not skip_step_logging
-                and data_iter % self.logging_conf.log_freq == 0
-                and self.rank == 0
-                and not hasattr(train_bar, "set_postfix")
-            ):
-                progress.display(data_iter)
-
             # Log progress meters.
             if (
                 not skip_step_logging
@@ -831,14 +878,12 @@ class Trainer:
 
         self._check_epoch_length_agreement(iters_done, limit_train_batches)
 
-        if hasattr(train_bar, "close"):
-            train_bar.close()
+        train_bar.close()
+        self._stop_workers(batches)
 
         self.est_epoch_time["train"] = batch_time.avg * limit_train_batches
         self._log_timers("train")
-        self._log_epoch(scalar_meters)
-
-        logging.info(f"Train Epoch Finished: [{self.epoch}]")
+        return self._epoch_averages(scalar_meters)
 
     def _check_epoch_length_agreement(self, iters_done: int, limit_train_batches: int) -> None:
         """Fail loudly when a rank ran fewer iterations than the rest of the world.
@@ -934,9 +979,6 @@ class Trainer:
 
 
     def _log_timers(self, phase):
-        epochs_remaining = self.max_epochs - self.epoch - 1
-        time_remaining = epochs_remaining * self.est_epoch_time["train"]
-
         if self.rank == 0:
             self.tb_writer.log(
                 os.path.join("Step_Stats", phase, self.time_elapsed_meter.name),
@@ -944,27 +986,17 @@ class Trainer:
                 self.steps[phase],
             )
 
-        logging.info(f"Estimated time remaining: {human_readable_time(time_remaining)}")
-
-    def _log_epoch(self, scalar_meters):
-        """Write one point per finished epoch. The x-axis on wandb is the epoch index."""
-        if self.rank != 0:
-            return
-        metrics = {}
-        for name, meter in scalar_meters.items():
-            key = name[len("train_") :] if name.startswith("train_") else name
-            metrics[f"train/{key}"] = meter.avg
-        learning_rates = [
-            group["lr"]
-            for optim in self.optims
-            for group in optim.optimizer.param_groups
-        ]
+    def _epoch_averages(self, scalar_meters) -> Dict[str, float]:
+        """Epoch average of each logged scalar, keyed by its plain name, plus the mean learning rate."""
+        averages = {
+            name[len("train_") :]: meter.avg
+            for name, meter in scalar_meters.items()
+            if name.startswith("train_") and meter.count
+        }
+        learning_rates = [group["lr"] for optim in self.optims for group in optim.optimizer.param_groups]
         if learning_rates:
-            metrics["train/lr"] = sum(learning_rates) / len(learning_rates)
-        summary = ", ".join(f"{key}={value:.4f}" for key, value in metrics.items())
-        logging.info(f"Epoch [{self.epoch}] averages: {summary}")
-        if self.wandb_writer is not None:
-            self.wandb_writer.log_epoch(metrics, int(self.epoch))
+            averages["lr"] = sum(learning_rates) / len(learning_rates)
+        return averages
 
     def _setup_components(self):
         logging.info("Setting up components: Model, loss, optim, meters etc.")
