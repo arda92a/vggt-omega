@@ -45,15 +45,7 @@ class WandbLogger:
 
         self._wandb = wandb
         logging.info(f"Wandb run '{name}' in project '{project}' ({mode})")
-        init_kwargs = dict(project=project, name=name, entity=entity, mode=mode, dir=dir)
-        try:
-            # Same id resumes a crashed run. A deleted id cannot be reused.
-            self._run = wandb.init(**init_kwargs, id=name, resume="allow")
-        except Exception as exc:
-            if "previously created and deleted" not in str(exc):
-                raise
-            logging.warning("Wandb run id %r was deleted. Starting a new run.", name)
-            self._run = wandb.init(**init_kwargs)
+        self._run = wandb.init(project=project, name=name, entity=entity, mode=mode, dir=dir)
         self._define_axes()
         atexit.register(self.close)
 

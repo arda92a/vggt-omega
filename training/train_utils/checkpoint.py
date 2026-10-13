@@ -123,20 +123,3 @@ def load_dinov3_weights(model: nn.Module, path: str, strict: bool = True) -> Non
         logging.info(f"Unexpected DINOv3 keys (first 20): {unexpected[:20]}")
 
     _initialize_aggregator_blocks_from_dinov3(aggregator)
-
-
-def restore_optimizer_state(optimizers: List[Any], state: Any) -> None:
-    if state is None:
-        return
-    states = state if isinstance(state, list) else [state]
-    if len(states) != len(optimizers):
-        raise ValueError(f"Checkpoint holds {len(states)} optimizer states but there are {len(optimizers)}")
-    for optimizer, optimizer_state in zip(optimizers, states):
-        optimizer.load_state_dict(optimizer_state)
-
-
-def move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
-    for state in optimizer.state.values():
-        for key, value in state.items():
-            if torch.is_tensor(value):
-                state[key] = value.to(device, non_blocking=True)

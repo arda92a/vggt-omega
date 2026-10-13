@@ -129,7 +129,7 @@ If `fsdp_settings.param_dtype` is `bfloat16`
 or `float16`, AMP must be enabled and `optim.amp.amp_dtype` must match it. The default FSDP2
 settings are defined by [`FSDPSettings`](train_utils/fsdp.py).
 
-If checkpoint.save_dir contains checkpoint.pt (DDP) or checkpoint/ (FSDP2), training resumes automatically. Otherwise, the DINOv3 backbone plus aggregator and/or model are initialized from checkpoint.dinov3_weight_path and checkpoint.model_weight_path respectively; if both are null, training starts from random weights.
+Training never resumes. Every launch starts from checkpoint.dinov3_weight_path and/or checkpoint.model_weight_path (the DINOv3 backbone plus aggregator, and the model, respectively); if both are null, it starts from random weights. `train.py` gives each launch a new run name: if `logs/<exp_name>` exists, it uses `<exp_name>_2`, `_3`, and so on. DDP checkpoints hold the weights only.
 
 DDP checkpoints are single `.pt` files. FSDP2 checkpoints are sharded DCP directories; convert
 one to an inference-compatible `.pt` file with:
@@ -161,7 +161,7 @@ export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*;
 uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 6   # writes train.txt, val.txt
 uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
 uv run python train.py --config multiscene_stage2 \
-    checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt   # stage 2
+    checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt   # stage 2 (use the stage 1 folder of your run, e.g. ..._stage1_2)
 uv run torchrun --nproc_per_node=8 train.py ...                                               # several GPUs
 uv run python train.py --eval-only checkpoint.model_weight_path=...                           # validation only
 uv run python training/multiscene_smoke.py                                                    # CPU checks

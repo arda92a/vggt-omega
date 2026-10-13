@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
+from pathlib import Path
 
 from hydra import compose, initialize
 from omegaconf import OmegaConf
@@ -12,11 +13,26 @@ from omegaconf import OmegaConf
 from trainer import Trainer
 
 
-def load_config(config_name: str = "default", overrides=None):
-    """Compose the config exactly as training does, so callers can inspect it without training."""
+def free_run_name(name: str, root: str = "logs") -> str:
+    """`name` if logs/name does not exist yet, else name_2, name_3, ... so no run reuses an old one."""
+    candidate, number = name, 2
+    while (Path(root) / candidate).exists():
+        candidate = f"{name}_{number}"
+        number += 1
+    return candidate
+
+
+def load_config(config_name: str = "default", overrides=None, new_run: bool = False):
+    """Compose the config exactly as training does, so callers can inspect it without training.
+
+    With `new_run`, exp_name is replaced by the first free name, which moves the log directory,
+    the checkpoints and the wandb run name with it.
+    """
     with initialize(version_base=None, config_path="config"):
         cfg = compose(config_name=config_name, overrides=list(overrides or []))
 
+    if new_run:
+        cfg.exp_name = free_run_name(str(cfg.exp_name))
     # Resolve ${...} in place but keep a DictConfig: the trainer reads nested config with
     # attribute access, which a plain dict does not support.
     OmegaConf.resolve(cfg)
@@ -27,7 +43,7 @@ def load_config(config_name: str = "default", overrides=None):
 
 
 def run(config_name: str = "default", overrides=None) -> None:
-    Trainer(**load_config(config_name, overrides)).run()
+    Trainer(**load_config(config_name, overrides, new_run=True)).run()
 
 
 def main():

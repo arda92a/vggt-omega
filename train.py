@@ -93,7 +93,7 @@ def main() -> None:
         overrides.append(f"data.train.dataset.dataset_configs.merged.UNIFIED_DIR={json.dumps(str(data_dir))}")
     if args.eval_only:
         overrides.append("eval_only=true")
-    cfg = load_config(args.config, overrides)
+    cfg = load_config(args.config, overrides, new_run=not args.eval_only)
     _check_dataset_roots(cfg)
 
     _use_single_process_defaults()

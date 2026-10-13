@@ -19,22 +19,6 @@ def makedir(dir_path):
     os.makedirs(dir_path, exist_ok=True)
 
 
-def get_resume_checkpoint(checkpoint_save_dir):
-    """Return the checkpoint to auto-resume from, or None.
-
-    DDP writes a file, `checkpoint.pt`; FSDP2 writes a DCP directory, `checkpoint/`.
-    Checking only for the file makes an FSDP run silently restart from scratch on every
-    requeue, since it never recognises the checkpoint it just wrote.
-    """
-    ckpt_file = os.path.join(checkpoint_save_dir, "checkpoint.pt")
-    if os.path.isfile(ckpt_file):
-        return ckpt_file
-    ckpt_dir = os.path.join(checkpoint_save_dir, "checkpoint")
-    if os.path.isdir(ckpt_dir):
-        return ckpt_dir
-    return None
-
-
 def get_amp_type(amp_type: Optional[str] = None):
     if amp_type is None:
         return None

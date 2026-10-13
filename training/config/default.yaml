@@ -169,11 +169,11 @@ optim:
 checkpoint:
   save_dir: logs/${exp_name}/checkpoints
   save_freq: 5
-  # Optional DINOv3 checkpoint. When no resume checkpoint exists, it initialises both the image
-  # backbone and aggregator blocks before any model_weight_path weights.
+  # Optional DINOv3 checkpoint. It initialises both the image backbone and aggregator blocks
+  # before any model_weight_path weights.
   dinov3_weight_path: null
   dinov3_weight_strict: true
-  # Weights-only initialisation, used when save_dir holds nothing to resume from. Leave null
+  # Weights-only initialisation. Leave null
   # to train from random initialisation -- see the README for why that is unlikely to be what
   # you want.
   model_weight_path: null

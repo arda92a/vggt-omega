@@ -30,11 +30,8 @@ from omegaconf import OmegaConf
 
 from train_utils.checkpoint import (
     DDPCheckpointSaver,
-    load_checkpoint as load_checkpoint_file,
     load_dinov3_weights,
     load_model_weights,
-    move_optimizer_state_to_device,
-    restore_optimizer_state,
 )
 from train_utils.console import Progress
 from train_utils.distributed import (
@@ -44,7 +41,6 @@ from train_utils.distributed import (
 )
 from train_utils.freeze import freeze_modules, freeze_parameters
 from train_utils.fsdp import (
-    ShardedCheckpointLoader,
     ShardedCheckpointSaver,
     apply_fsdp2_strategy,
     create_grad_scaler,
@@ -55,7 +51,6 @@ from train_utils.general import (
     DurationMeter,
     copy_data_to_device,
     get_amp_type,
-    get_resume_checkpoint,
     makedir,
     set_seeds,
 )
@@ -157,7 +152,7 @@ class Trainer:
 
         else:
             self._construct_optimizers()
-            self.load_checkpoint()
+            self._load_initial_model_weights()
             self._setup_ddp_distributed_training(distributed)
 
         if self.gradient_clipper is not None:
@@ -169,7 +164,6 @@ class Trainer:
         Initializes counters for elapsed time and eta.
         """
         self.start_time = time.time()
-        self.ckpt_time_elapsed = 0
         self.est_epoch_time = {"train": 0}
     def _infer_distributed_backend_if_none(self, distributed_conf):
         if distributed_conf.backend is None:
@@ -267,9 +261,6 @@ class Trainer:
             "steps": self.steps,
             "time_elapsed": self.time_elapsed_meter.val,
         }
-        if self.optim_conf.amp.enabled:
-            checkpoint_content["scaler"] = self.scaler.state_dict()
-
         if self._is_fsdp_training():
             saver = ShardedCheckpointSaver(
                 checkpoint_folder,
@@ -285,12 +276,6 @@ class Trainer:
                 **checkpoint_content,
             )
         else:
-            # For DDP, we save the optimizer state dicts directly
-            optimizer_state = [optim.optimizer.state_dict() for optim in self.optims]
-            if len(self.optims) == 1:
-                optimizer_state = optimizer_state[0]
-            checkpoint_content["optimizer"] = optimizer_state
-
             saver = DDPCheckpointSaver(
                 checkpoint_folder,
                 checkpoint_names=checkpoint_names,
@@ -317,18 +302,11 @@ class Trainer:
         assert self._is_fsdp_training()
         logging.info("Setting up FSDP (FSDP2)")
 
-        # Check if we are resuming from a checkpoint
-        ckpt_path = get_resume_checkpoint(self.checkpoint_conf.save_dir)
+        # Pretrained weights are not DCP format, so they must load before the wrap turns
+        # parameters into DTensors.
+        self._load_initial_model_weights()
 
-        # 1. Load Pretrained Weights BEFORE wrapping (if NOT resuming)
-        # CRITICAL: Pretrained weights (non-DCP format) must be loaded BEFORE FSDP wrap
-        # because after wrap, parameters become DTensors and standard load_state_dict fails.
-        if ckpt_path is None:
-            logging.info("No resume checkpoint found. Loading pretrained weights (if any) BEFORE FSDP wrap.")
-            self._load_initial_model_weights()
-
-        # 2. Wrap Model with FSDP2
-        # FSDP2 applies fully_shard to the model (in-place)
+        # FSDP2 applies fully_shard to the model in place.
         self._model_to_fsdp()
 
         if self.rank == 0:
@@ -337,17 +315,12 @@ class Trainer:
         # Optimizers must be constructed after wrapping, so they see the sharded parameters.
         self._construct_optimizers()
 
-        # 4. Load Resume Checkpoint (DCP format, after wrap and optimizer init)
-        if ckpt_path is not None:
-            logging.info(f"Resuming from checkpoint: {ckpt_path}")
-            self._load_resuming_checkpoint(ckpt_path)
-
     def _load_initial_model_weights(self):
         """Initialise DINOv3 and/or model weights when configured.
 
-        Only runs when there is nothing to resume from. Loading is not FSDP-aware, so it has
-        to happen before the model is sharded. Full-model weights are loaded last and therefore
-        take precedence over DINOv3 weights for overlapping parameters.
+        Loading is not FSDP-aware, so it has to happen before the model is sharded.
+        Full-model weights are loaded last and therefore take precedence over DINOv3 weights
+        for overlapping parameters.
         """
         dinov3_path = self.checkpoint_conf.dinov3_weight_path
         if dinov3_path is not None:
@@ -368,78 +341,8 @@ class Trainer:
             strict=self.checkpoint_conf.model_weight_strict,
         )
 
-    def load_checkpoint(self):
-        dist.barrier()
-        assert (
-            not self._is_fsdp_training()
-        ), "load_checkpoint is included in the FSDP setup"
-        ckpt_path = get_resume_checkpoint(self.checkpoint_conf.save_dir)
-        if ckpt_path is None:
-            self._load_initial_model_weights()
-        else:
-            self._load_resuming_checkpoint(ckpt_path)
-        dist.barrier()
-
-
-    def _load_resuming_checkpoint(self, ckpt_path: str):
-        logging.info(f"Resuming training from {ckpt_path} (rank {self.rank})")
-        # Clear CUDA cache before loading
-        torch.cuda.empty_cache()
-
-        checkpoint = {}
-
-        if self._is_fsdp_training():
-            loader = ShardedCheckpointLoader()
-
-            checkpoint = loader.load_checkpoint(
-                model=self.model,
-                optimizers=[optim.optimizer for optim in self.optims],
-                checkpoint_path=ckpt_path,
-            )
-            logging.info(f"Done loading FSDP2 state (rank {self.rank})")
-
-        else:
-            checkpoint = load_checkpoint_file(ckpt_path)
-            self.model.load_state_dict(checkpoint["model"])
-
-            # Clear model state from checkpoint to free CPU memory
-            if "model" in checkpoint:
-                del checkpoint["model"]
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            logging.info(f"Loading the optimizer state dict (rank {self.rank})")
-            restore_optimizer_state([optim.optimizer for optim in self.optims], checkpoint["optimizer"])
-            for optim in self.optims:
-                move_optimizer_state_to_device(optim.optimizer, self.device)
-
-            # Clear optimizer state from checkpoint
-            if "optimizer" in checkpoint:
-                del checkpoint["optimizer"]
-
-        # Common Metadata Restore
-        if "epoch" in checkpoint:
-            self.epoch = checkpoint["epoch"]
-        elif "prev_epoch" in checkpoint:
-            self.epoch = checkpoint["prev_epoch"] + 1
-
-        if "steps" in checkpoint:
-            self.steps = checkpoint["steps"]
-
-        self.ckpt_time_elapsed = checkpoint.get("time_elapsed", 0)
-
-        if self.optim_conf.amp.enabled and "scaler" in checkpoint:
-            self.scaler.load_state_dict(checkpoint["scaler"])
-
-        # global GC & CUDA allocator flush
-        gc.collect()
-        del checkpoint
-        torch.cuda.empty_cache()
-
     def run(self):
         self._log_data_summary()
-        if self.epoch > 0:
-            logging.info(f"Resuming training from epoch {self.epoch}")
         if self.eval_only:
             started = time.time()
             metrics = self.run_validation(self.epoch)
@@ -760,7 +663,6 @@ class Trainer:
             chunked_batches = chunk_batch_for_accum_steps(batch, accum_steps)
 
             # Update training progress (where) BEFORE the step so loss functions use the correct value
-            # This is crucial for resuming, otherwise the first batch uses where=0.0
             assert data_iter <= limit_train_batches  # allow for off by one errors
             exact_epoch = self.epoch + float(data_iter) / limit_train_batches
             self.schedule_progress = float(exact_epoch) / self.max_epochs
@@ -854,7 +756,7 @@ class Trainer:
                 batch_time.update(iter_duration)
 
             self.time_elapsed_meter.update(
-                time.time() - self.start_time + self.ckpt_time_elapsed
+                time.time() - self.start_time
             )
 
             if not skip_step_logging:

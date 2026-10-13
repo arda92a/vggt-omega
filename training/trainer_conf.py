@@ -56,11 +56,11 @@ class TrainerCheckpointConf:
     save_dir: str
     save_freq: int
     # Path to a DINOv3 backbone checkpoint used to initialise
-    # model.aggregator.patch_embed. Ignored when resuming from save_dir.
+    # model.aggregator.patch_embed.
     dinov3_weight_path: Optional[str] = None
     dinov3_weight_strict: bool = True
     # Path to a checkpoint whose weights initialise the model, without restoring optimizer
-    # or epoch state. Ignored when resuming from save_dir.
+    # or epoch state.
     model_weight_path: Optional[str] = None
     model_weight_strict: bool = False
 
