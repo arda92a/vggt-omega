@@ -13,6 +13,7 @@ os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
 import contextlib
 import gc
+import inspect
 import json
 import logging
 import time
@@ -179,7 +180,11 @@ class Trainer:
         torch.backends.cudnn.benchmark = cuda_conf.cudnn_benchmark
         torch.backends.cuda.matmul.allow_tf32 = cuda_conf.allow_tf32
         torch.backends.cudnn.allow_tf32 = cuda_conf.allow_tf32
-        setup_distributed_backend(distributed_conf.backend, distributed_conf.timeout_mins)
+        setup_distributed_backend(
+            distributed_conf.backend,
+            distributed_conf.timeout_mins,
+            device_id=torch.device("cuda", self.local_rank),
+        )
 
     def _setup_device(self):
         self.local_rank, self.rank = get_machine_local_and_dist_rank()
@@ -223,8 +228,12 @@ class Trainer:
             find_unused_parameters=distributed_conf.find_unused_parameters,
             gradient_as_bucket_view=distributed_conf.gradient_as_bucket_view,
             bucket_cap_mb=distributed_conf.bucket_cap_mb,
-            broadcast_buffers=distributed_conf.broadcast_buffers,
         )
+        # Newer torch renamed broadcast_buffers and warns about the old name.
+        if "forward_sync_buffers" in inspect.signature(nn.parallel.DistributedDataParallel).parameters:
+            ddp_options["forward_sync_buffers"] = distributed_conf.broadcast_buffers
+        else:
+            ddp_options["broadcast_buffers"] = distributed_conf.broadcast_buffers
 
         self.model = nn.parallel.DistributedDataParallel(
             self.model,
@@ -233,14 +242,14 @@ class Trainer:
         )
 
     def _move_to_device(self):
-        logging.info(
+        logging.debug(
             f"Moving components to device {self.device} and local rank {self.local_rank}."
         )
         self.model.to(self.device)
 
         if self.loss:
             copy_data_to_device(self.loss, self.device)
-        logging.info(
+        logging.debug(
             f"Done moving components to device {self.device} and local rank {self.local_rank}."
         )
 
@@ -300,7 +309,7 @@ class Trainer:
 
     def _setup_fsdp(self):
         assert self._is_fsdp_training()
-        logging.info("Setting up FSDP (FSDP2)")
+        logging.debug("Setting up FSDP (FSDP2)")
 
         # Pretrained weights are not DCP format, so they must load before the wrap turns
         # parameters into DTensors.
@@ -310,7 +319,7 @@ class Trainer:
         self._model_to_fsdp()
 
         if self.rank == 0:
-            logging.info("Model has been wrapped with FSDP")
+            logging.debug("Model has been wrapped with FSDP")
 
         # Optimizers must be constructed after wrapping, so they see the sharded parameters.
         self._construct_optimizers()
@@ -440,7 +449,7 @@ class Trainer:
         try:
             shutdown()
         except RuntimeError as error:
-            logging.warning(f"A data worker exited abnormally while the loader was closed: {error}")
+            logging.debug(f"A data worker exited abnormally while the loader was closed: {error}")
 
     @contextlib.contextmanager
     def _worker_scope(self, loader):
@@ -855,13 +864,13 @@ class Trainer:
                 loss = loss / accum_steps
 
                 if log_first_iter_backward:
-                    logging.info(
+                    logging.debug(
                         f"[Rank {self.rank}] About to run backward on first iter "
                         f"(chunk {i + 1}/{accum_steps})"
                     )
                 self.scaler.scale(loss).backward()
                 if log_first_iter_backward:
-                    logging.info(
+                    logging.debug(
                         f"[Rank {self.rank}] Finished backward on first iter "
                         f"(chunk {i + 1}/{accum_steps})"
                     )
@@ -893,7 +902,7 @@ class Trainer:
         return averages
 
     def _setup_components(self):
-        logging.info("Setting up components: Model, loss, optim, meters etc.")
+        logging.debug("Setting up components: Model, loss, optim, meters etc.")
 
         self.epoch = self.start_epoch
         self.steps = {"train": 0}
@@ -921,23 +930,23 @@ class Trainer:
 
 
         if self.optim_conf.frozen_module_names is not None:
-            logging.info(
+            logging.debug(
                 f"[Start] Freezing 'frozen_module_names' on rank {self.rank}"
             )
             self.model = freeze_modules(
                 self.model, name_patterns=self.optim_conf.frozen_module_names
             )
-            logging.info(
+            logging.debug(
                 f"[Done] Freezing 'frozen_module_names' on rank {self.rank}"
             )
         if self.optim_conf.frozen_param_names is not None:
-            logging.info(
+            logging.debug(
                 f"[Start] Freezing 'frozen_param_names' on rank {self.rank}"
             )
             self.model = freeze_parameters(
                 self.model, name_patterns=self.optim_conf.frozen_param_names
             )
-            logging.info(
+            logging.debug(
                 f"[Done] Freezing 'frozen_param_names' on rank {self.rank}"
             )
 
@@ -959,7 +968,7 @@ class Trainer:
 
         self.gradient_clipper = instantiate(self.optim_conf.gradient_clip)
 
-        logging.info("Finished setting up components: Model, loss, optim, meters etc.")
+        logging.debug("Finished setting up components: Model, loss, optim, meters etc.")
 
     def _construct_optimizers(self):
         self.optims = construct_optimizers(self.model, self.optim_conf)

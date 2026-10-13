@@ -22,7 +22,7 @@ class TensorBoardLogger:
         self._path = path
         _, rank = get_machine_local_and_dist_rank()
         if rank == 0:
-            logging.info(f"TensorBoard files will be written to {path}")
+            logging.debug(f"TensorBoard files will be written to {path}")
             self._writer = SummaryWriter(log_dir=path, filename_suffix=filename_suffix or str(uuid.uuid4()), **kwargs)
         atexit.register(self.close)
 

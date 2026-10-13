@@ -106,7 +106,7 @@ class BaseDataset(Dataset):
         """
         shared_edge_rtol_thres = self.shared_edge_rtol_thres
         if shared_edge_rtol_thres is not None and float(shared_edge_rtol_thres) >= 0:
-            logging.info(
+            logging.debug(
                 f"Using shared_edge_rtol_thres={float(shared_edge_rtol_thres)} "
                 f"for {self.__class__.__name__}"
             )
@@ -251,7 +251,7 @@ class BaseDataset(Dataset):
         depth_map[edge_mask] = 0.0
 
         if getattr(self, "verbose", False):
-            logging.info(
+            logging.debug(
                 f"Masked {int(edge_mask.sum())} depth edge pixels for "
                 f"{seq_name}/{idx} with edge_rtol_thres={self.edge_rtol_thres}"
             )

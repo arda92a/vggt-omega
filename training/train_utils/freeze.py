@@ -29,7 +29,7 @@ def freeze_modules(model: nn.Module, name_patterns: List[str]) -> nn.Module:
             param.requires_grad = False
 
     _check_patterns_used(matched, name_patterns, "module")
-    logging.info(f"Froze {len(matched)} modules: {matched}")
+    logging.debug(f"Froze {len(matched)} modules: {matched}")
     return model
 
 
@@ -42,7 +42,7 @@ def freeze_parameters(model: nn.Module, name_patterns: List[str]) -> nn.Module:
             param.requires_grad = False
 
     _check_patterns_used(matched, name_patterns, "parameter")
-    logging.info(f"Froze {len(matched)} parameters")
+    logging.debug(f"Froze {len(matched)} parameters")
     return model
 
 

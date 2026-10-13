@@ -141,7 +141,7 @@ class UnifiedDataset(BaseDataset):
         self.cam_from_worlds_filename = cam_from_worlds_filename
         self.intrinsics_filename = intrinsics_filename
         self.disable_depth_loss = disable_depth_loss
-        logging.info(
+        logging.debug(
             f"{self.__class__.__name__} dataset_prefix={dataset_prefix} "
             f"disable_depth_loss={self.disable_depth_loss}"
         )
@@ -172,22 +172,22 @@ class UnifiedDataset(BaseDataset):
             self.revisit_policy == REVISIT_POLICY_AVOID_IF_POSSIBLE
             and self.revisit_avoid_prob < 1.0
         ):
-            logging.info(
+            logging.debug(
                 f"Enabled stochastic revisit avoidance for {self.name}: "
                 f"p={self.revisit_avoid_prob} per sampled sequence"
             )
         self.mask_path = mask_path
         if self.force_crop is not None and self.force_crop > 0:
-            logging.info(
+            logging.debug(
                 f"Enabled force center crop for {self.name}: crop={self.force_crop}"
             )
         if self.edge_rtol_thres > 0:
-            logging.info(
+            logging.debug(
                 f"Enabled depth edge filtering for {self.name}: "
                 f"edge_rtol_thres={self.edge_rtol_thres}"
             )
         if self.valid_mask_erode_iters > 0:
-            logging.info(
+            logging.debug(
                 f"Enabled valid depth mask erosion for {self.name}: "
                 f"valid_mask_erode_iters={self.valid_mask_erode_iters}"
             )
@@ -197,14 +197,14 @@ class UnifiedDataset(BaseDataset):
                 "UNIFIED_DIR must point at the root of a converted dataset"
             )
 
-        logging.info(f"UNIFIED_DIR is {self.UNIFIED_DIR}")
+        logging.debug(f"UNIFIED_DIR is {self.UNIFIED_DIR}")
 
         # Load sequence list. Validation uses its own list when one is given.
         list_file = self.sequence_list_file
         if not self.training and self.val_sequence_list_file:
             list_file = self.val_sequence_list_file
         if list_file:
-            logging.info(f"Loading sequence list from {list_file}")
+            logging.debug(f"Loading sequence list from {list_file}")
             list_path = Path(list_file)
             if not list_path.is_absolute() and not list_path.exists():
                 # Bundled lists such as valid_seqs/uco3d.txt are relative to training/.
@@ -222,7 +222,7 @@ class UnifiedDataset(BaseDataset):
         sequence_list = sorted(sequence_list)
         # Split dataset into training and testing sets
         if self.train_split_ratio > 0 and self.train_split_ratio < 1.0:
-            logging.info(
+            logging.debug(
                 f"Splitting dataset {self.name} with train_split_ratio={self.train_split_ratio}, seed=42"
             )
             # Use a fixed seed for reproducibility
@@ -245,8 +245,8 @@ class UnifiedDataset(BaseDataset):
             )
 
         status = "Training" if self.training else "Testing"
-        logging.info(f"{status}: {self.name} Real Data size: {self.sequence_list_len}")
-        logging.info(f"{status}: {self.name} Data dataset length: {len(self)}")
+        logging.debug(f"{status}: {self.name} Real Data size: {self.sequence_list_len}")
+        logging.debug(f"{status}: {self.name} Data dataset length: {len(self)}")
 
     def resolve_frame_window(self, img_per_seq):
         return resolve_frame_window(
@@ -322,7 +322,7 @@ class UnifiedDataset(BaseDataset):
                 ranking = read_npy_wrapper(ranking_path, optional=True)
 
                 if ranking is None:
-                    logging.info(
+                    logging.debug(
                         f"Ranking not found at path: {ranking_path}. Generating on the fly."
                     )
                     ranking = LazyIndexRanking(num_imgs, effective_frame_window)
@@ -417,7 +417,7 @@ class UnifiedDataset(BaseDataset):
                 )
 
             if self.verbose:
-                logging.info(
+                logging.debug(
                     f"depth_map before thresholding {img_path} min {depth_map.min()} max {depth_map.max()}"
                 )
 
@@ -471,7 +471,7 @@ class UnifiedDataset(BaseDataset):
                 assert abs(rot_det - 1.0) < 1e-3, (
                     f"det(extri[:3,:3]) is {rot_det}, should be 1.0"
                 )
-                logging.info(f"det(extri[:3,:3]) {rot_det}")
+                logging.debug(f"det(extri[:3,:3]) {rot_det}")
 
             images.append(image)
             depths.append(depth_map)
@@ -570,7 +570,7 @@ class UnifiedDataset(BaseDataset):
         depth_map[~eroded_valid_mask] = 0.0
 
         if self.verbose:
-            logging.info(
+            logging.debug(
                 f"Masked {int((valid_mask & ~eroded_valid_mask).sum())} boundary depth pixels "
                 f"for {seq_name}/{idx} with valid_mask_erode_iters={self.valid_mask_erode_iters}"
             )

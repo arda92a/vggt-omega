@@ -178,3 +178,15 @@ epoch on held-out scenes (`val.txt`). Grouping scores: `ari`, `perfect_bags`, `p
 After training, `model.predict_scenes(images)` returns one entry per scene with `images`, `anchor`, `camera_poses` and
 `pointcloud`. Bags come from `data.train.mixed_scene` (scene count, frames per scene, same-dataset negatives);
 a bag uses as many scenes as the loader batch allows, up to `max(num_scenes_range)`, so raise `per_gpu_batch_scale` to see larger bags.
+
+### Local grouping demo
+
+Copy a checkpoint from the server and open the viewer on your own machine:
+
+```bash
+scp train@SERVER:~/arda/vggt-omega/logs/<run>/checkpoints/checkpoint.pt checkpoints/multiscene.pt
+uv run --extra ui python demo_multiscene.py --checkpoint checkpoints/multiscene.pt
+```
+
+Upload any images. The viewer shows the predicted scenes and the affinity matrices (frames sorted by predicted scene).
+`--route-layer` must match training (11 in the shipped configs).

@@ -30,6 +30,9 @@ demo = [
 export = [
     "pycolmap>=3.10.0",
 ]
+ui = [
+    "gradio>=5.17.1",
+]
 train = [
     "torch>=2.6",
     "torchvision>=0.21",

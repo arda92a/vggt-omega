@@ -44,7 +44,7 @@ class DDPCheckpointSaver:
 
 
 def load_checkpoint(path: str, map_location="cpu") -> Dict[str, Any]:
-    logging.info(f"Loading checkpoint from {path}")
+    logging.debug(f"Loading checkpoint from {path}")
     return torch.load(path, map_location=map_location, weights_only=False)
 
 
@@ -60,9 +60,9 @@ def load_model_weights(model: nn.Module, path: str, strict: bool = False) -> Non
     missing, unexpected = getattr(result, "missing_keys", []), getattr(result, "unexpected_keys", [])
     logging.info(f"Loaded weights from {path}: {len(missing)} missing, {len(unexpected)} unexpected keys")
     if missing:
-        logging.info(f"Missing keys (first 20): {missing[:20]}")
+        logging.debug(f"Missing keys (first 20): {missing[:20]}")
     if unexpected:
-        logging.info(f"Unexpected keys (first 20): {unexpected[:20]}")
+        logging.debug(f"Unexpected keys (first 20): {unexpected[:20]}")
 
 
 def _initialize_aggregator_blocks_from_dinov3(aggregator: nn.Module) -> None:
@@ -89,7 +89,7 @@ def _initialize_aggregator_blocks_from_dinov3(aggregator: nn.Module) -> None:
             frame_blocks[-offset].load_state_dict(source_state_dict, strict=False)
             inter_frame_blocks[-offset].load_state_dict(source_state_dict, strict=False)
 
-    logging.info(
+    logging.debug(
         f"Initialised {num_aggregator_blocks} frame and inter-frame aggregator blocks "
         f"from {num_source_blocks} DINOv3 blocks"
     )
@@ -118,8 +118,8 @@ def load_dinov3_weights(model: nn.Module, path: str, strict: bool = True) -> Non
     unexpected = getattr(result, "unexpected_keys", [])
     logging.info(f"Loaded DINOv3 weights from {path}: {len(missing)} missing, {len(unexpected)} unexpected keys")
     if missing:
-        logging.info(f"Missing DINOv3 keys (first 20): {missing[:20]}")
+        logging.debug(f"Missing DINOv3 keys (first 20): {missing[:20]}")
     if unexpected:
-        logging.info(f"Unexpected DINOv3 keys (first 20): {unexpected[:20]}")
+        logging.debug(f"Unexpected DINOv3 keys (first 20): {unexpected[:20]}")
 
     _initialize_aggregator_blocks_from_dinov3(aggregator)

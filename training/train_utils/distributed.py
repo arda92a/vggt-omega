@@ -21,8 +21,8 @@ def get_machine_local_and_dist_rank():
     return int(local_rank), int(distributed_rank)
 
 
-def setup_distributed_backend(backend, timeout_mins):
-    dist.init_process_group(backend=backend, timeout=timedelta(minutes=timeout_mins))
+def setup_distributed_backend(backend, timeout_mins, device_id=None):
+    dist.init_process_group(backend=backend, timeout=timedelta(minutes=timeout_mins), device_id=device_id)
 
 
 def unwrap_ddp_if_wrapped(model):

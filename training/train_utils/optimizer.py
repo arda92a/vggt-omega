@@ -74,7 +74,7 @@ def unix_param_pattern_to_parameter_names(patterns: Optional[List[str]], paramet
         hits = set(fnmatch.filter(parameter_names, pattern, flags=GLOB_FLAGS))
         if not hits:
             raise ValueError(f"Parameter pattern '{pattern}' matched nothing")
-        logging.info(f"Pattern '{pattern}' matched {len(hits)} parameters")
+        logging.debug(f"Pattern '{pattern}' matched {len(hits)} parameters")
         matched.append(hits)
     return set.union(*matched)
 
@@ -115,7 +115,7 @@ class FilterBiasAndBN:
 
     def __call__(self, scheduler_cfgs: List[List[Dict]], model: nn.Module) -> List[List[Dict]]:
         no_decay = self._no_decay_parameter_names(model)
-        logging.info(f"FilterBiasAndBN: {len(no_decay)} parameters excluded from weight decay")
+        logging.debug(f"FilterBiasAndBN: {len(no_decay)} parameters excluded from weight decay")
 
         wd_idx = next(
             (i for i, cfgs in enumerate(scheduler_cfgs) if cfgs and cfgs[0].get("option") == "weight_decay"),
@@ -241,7 +241,7 @@ def construct_optimizer(
 
     schedulers, param_groups = map_scheduler_cfgs_to_param_groups(all_scheduler_cfgs, named_parameters)
     validate_param_group_params(param_groups, model)
-    logging.info(f"Constructed {len(param_groups)} optimizer parameter groups")
+    logging.debug(f"Constructed {len(param_groups)} optimizer parameter groups")
 
     return OptimizerWrapper(hydra.utils.instantiate(optimizer_conf, param_groups), schedulers)
 

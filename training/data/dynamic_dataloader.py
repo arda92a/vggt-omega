@@ -121,7 +121,7 @@ class DynamicTorchDataset:
                     "No discrete aspect ratios remain after applying "
                     f"aspect_ratio_range {aspect_ratio_range}"
                 )
-            logging.info(
+            logging.debug(
                 "Using discrete aspect ratios: %s",
                 [round(ratio, 4) for ratio in aspect_ratio_candidates],
             )
