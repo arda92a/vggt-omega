@@ -157,7 +157,7 @@ Design and metrics are in [`Multi_Scene_VGGT_Omega/plan.tex`](../Multi_Scene_VGG
 Run from the repository root:
 
 ```bash
-export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*; train.py also takes --data-dir
+export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*; train.py also takes --data-dir, and falls back to a ./MERGED_DIR folder
 uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 6   # writes train.txt, val.txt
 uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
 uv run python train.py --config multiscene_stage2 \

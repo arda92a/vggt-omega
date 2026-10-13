@@ -6,7 +6,7 @@
 #   uv run python train.py --config multiscene_stage1 --data-dir /path/to/unified/merged \
 #     checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt
 #
-# The data dir (--data-dir, default $MERGED_DIR) holds one folder per scene plus train.txt and val.txt, written by
+# The data dir (--data-dir, else $MERGED_DIR, else the MERGED_DIR folder) holds one folder per scene plus train.txt and val.txt, written by
 # training/dataset_preparation/split_sequences.py. Validation reads val.txt only.
 # Offline wandb: logging.wandb_writer.mode=offline. Off: logging.wandb_writer.enabled=false.
 

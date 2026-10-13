@@ -1,12 +1,13 @@
 """Train multi-scene VGGT-Omega.
 
-    uv run python train.py --data-dir /path/to/merged        # or export MERGED_DIR=/path/to/merged
+    uv run python train.py                                   # data in ./MERGED_DIR
+    uv run python train.py --data-dir /path/to/merged
     uv run python train.py --config multiscene_stage2 checkpoint.model_weight_path=...
     uv run torchrun --nproc_per_node=8 train.py ...          # several GPUs
     uv run python train.py --eval-only checkpoint.model_weight_path=...
 
 Anything after the options is a hydra override, for example `max_epochs=1`. The dataset root is
---data-dir, which defaults to the MERGED_DIR environment variable.
+--data-dir, else the MERGED_DIR environment variable, else the MERGED_DIR folder in the repository.
 """
 
 import argparse
@@ -38,6 +39,19 @@ def _use_single_process_defaults() -> None:
         os.environ.setdefault(name, value)
 
 
+def _find_data_dir(explicit):
+    """--data-dir, else $MERGED_DIR, else a MERGED_DIR folder in the working directory or the repository."""
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_dir():
+            raise SystemExit(f"--data-dir {explicit} is not a directory")
+        return path.resolve()
+    for candidate in (os.environ.get("MERGED_DIR"), "MERGED_DIR", ROOT / "MERGED_DIR"):
+        if candidate and Path(candidate).expanduser().is_dir():
+            return Path(candidate).expanduser().resolve()
+    return None
+
+
 def _check_dataset_roots(cfg) -> None:
     missing = []
     for name, dataset in cfg.data.train.dataset.dataset_configs.items():
@@ -50,7 +64,7 @@ def _check_dataset_roots(cfg) -> None:
         raise SystemExit(
             "Dataset directories not found:\n"
             + "\n".join(missing)
-            + "\nPass --data-dir or set MERGED_DIR."
+            + "\nPass --data-dir, set MERGED_DIR, or put the data in a MERGED_DIR folder."
         )
 
 
@@ -59,8 +73,7 @@ def main() -> None:
     parser.add_argument("--config", default="multiscene_stage1", help="config name under training/config")
     parser.add_argument(
         "--data-dir",
-        default=os.environ.get("MERGED_DIR"),
-        help="unified dataset root with train.txt and val.txt (default: $MERGED_DIR)",
+        help="unified dataset root with train.txt and val.txt (default: $MERGED_DIR, else ./MERGED_DIR)",
     )
     parser.add_argument("--eval-only", action="store_true", help="run one validation pass and exit")
     parser.add_argument("overrides", nargs="*", help="hydra overrides, e.g. max_epochs=1")
@@ -75,9 +88,9 @@ def main() -> None:
     from trainer import Trainer
 
     overrides = list(args.overrides)
-    if args.data_dir:
-        root = json.dumps(str(Path(args.data_dir).expanduser().resolve()))
-        overrides.append(f"data.train.dataset.dataset_configs.merged.UNIFIED_DIR={root}")
+    data_dir = _find_data_dir(args.data_dir)
+    if data_dir is not None:
+        overrides.append(f"data.train.dataset.dataset_configs.merged.UNIFIED_DIR={json.dumps(str(data_dir))}")
     if args.eval_only:
         overrides.append("eval_only=true")
     cfg = load_config(args.config, overrides)
