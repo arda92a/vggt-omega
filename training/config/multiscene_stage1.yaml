@@ -72,7 +72,6 @@ validation:
   num_batches: 40
   num_workers: 2
   seed: 7
-  at_start: true
   # Also forward every scene alone, the original model's behaviour. Costs one extra pass per scene.
   include_separate: false
   mixed_scene:

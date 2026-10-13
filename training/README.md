@@ -171,10 +171,9 @@ uv run python training/multiscene_smoke.py                                      
 Any hydra override can follow, for example `max_epochs=1`, `~data.train.dataset.dataset_configs.eden`, or
 `logging.wandb_writer.mode=offline` (`enabled=false` turns wandb off; run `wandb login` once otherwise).
 
-Wandb panels: `train/*` and `val/*`, one point per epoch, plus an affinity heat-map. Validation runs
-before training and after every epoch on a held-out scenes (`val.txt`) and reports the `predicted`, `oracle`
-and `plain` systems (`val/<system>/<metric>`), and the gaps `val/contamination/*` and `val/cluster_gap/*`.
-Metrics: `ari`, `exact_partition`, `affinity_f1`, `rotation_deg`, `rra_15`, `rta_15`, `auc_30`, `abs_rel`, `delta125`.
+Wandb panels: `train/*` and `val/*`, one point per epoch, plus an affinity heat-map. Validation runs after every
+epoch on held-out scenes (`val.txt`). Grouping scores: `ari`, `perfect_bags`, `pair_acc`, `count_acc`, `separated`,
+`together`. Pose and depth (`auc_30`, `abs_rel`) are compared across `predicted`, `oracle` and `plain` in overlay charts.
 
 After training, `model.predict_scenes(images)` returns one entry per scene with `images`, `anchor`, `camera_poses` and
 `pointcloud`. Bags come from `data.train.mixed_scene` (scene count, frames per scene, same-dataset negatives);

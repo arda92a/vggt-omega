@@ -69,9 +69,9 @@ def format_epoch(
     title: Optional[str] = None,
 ) -> str:
     """One multi-line block for the whole epoch, so lines of different phases never interleave."""
-    title = title or ("before training" if epoch < 0 else f"epoch {epoch + 1}/{max_epochs}")
+    title = title or f"epoch {epoch + 1}/{max_epochs}"
     header = f"==== {title} "
-    if epoch >= 0 and train_seconds:
+    if train_seconds:
         header += f"| train {_clock(train_seconds)} | val {_clock(val_seconds)} | time left {_clock(eta_seconds)} "
     lines = [header.ljust(86, "=")]
     if train:

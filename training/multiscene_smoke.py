@@ -165,7 +165,7 @@ def test_report_formatting() -> None:
     charts = val_comparisons(val)
     _check("overlay charts", set(charts["pose_auc30"]) == {"predicted", "oracle", "plain"})
     _check("train names", set(train_scalars(train)) >= {"train/loss", "train/ari", "train/lr"})
-    _check("baseline block", "before training" in format_epoch(-1, 20, None, val))
+    _check("validation-only block", "validation only" in format_epoch(0, 20, None, val, title="validation only"))
 
 
 def test_adjusted_rand_index() -> None:

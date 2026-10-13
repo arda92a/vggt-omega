@@ -467,7 +467,7 @@ class Trainer:
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
         first_bag = None
-        desc = "validation" if epoch < 0 else f"validation {int(epoch) + 1}/{self.max_epochs}"
+        desc = f"validation {int(epoch) + 1}/{self.max_epochs}"
         progress = self._progress(num_batches, desc)
         with self._worker_scope(self.val_dataset.get_loader(epoch=0)) as batches:
             for index, batch in enumerate(batches):
@@ -551,7 +551,7 @@ class Trainer:
         val_seconds: float = 0.0,
         title: Optional[str] = None,
     ) -> None:
-        """Print one block and write one wandb row for the epoch. Epoch -1 is the untrained baseline."""
+        """Print one block and write one wandb row for the epoch."""
         if self.rank != 0:
             return
         eta = max(0, self.max_epochs - epoch - 1) * (train_seconds + val_seconds)
@@ -566,14 +566,6 @@ class Trainer:
         self.wandb_writer.log_epoch(payload, epoch, report.val_comparisons(val) if val else None)
 
     def run_train(self):
-        if (
-            self.val_dataset is not None
-            and self.validation_conf.get("at_start", True)
-            and self.epoch == self.start_epoch
-        ):
-            started = time.time()
-            baseline = self.run_validation(self.start_epoch - 1)
-            self._report_epoch(self.start_epoch - 1, val=baseline, val_seconds=time.time() - started)
         while self.epoch < self.max_epochs:
             set_seeds(self.seed_value + self.epoch*100, self.max_epochs, self.rank)
             gc.collect()
