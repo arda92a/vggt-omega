@@ -16,6 +16,7 @@ import gc
 import inspect
 import json
 import logging
+import shutil
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -901,6 +902,18 @@ class Trainer:
             averages["lr"] = sum(learning_rates) / len(learning_rates)
         return averages
 
+    def _check_disk_space(self) -> None:
+        """A checkpoint is the whole model, and the old file stays until the new one is written."""
+        save_dir = Path(self.checkpoint_conf.save_dir)
+        makedir(str(save_dir))
+        size = sum(t.numel() * t.element_size() for t in (*self.model.parameters(), *self.model.buffers()))
+        free = shutil.disk_usage(save_dir).free
+        if free < 2.2 * size:
+            raise RuntimeError(
+                f"Only {free / 1e9:.1f} GB free under {save_dir}. A checkpoint is {size / 1e9:.1f} GB and two "
+                f"copies exist while it is saved. Delete old runs under logs/ or set checkpoint.save_dir elsewhere."
+            )
+
     def _setup_components(self):
         logging.debug("Setting up components: Model, loss, optim, meters etc.")
 
@@ -927,6 +940,7 @@ class Trainer:
                 }
             )
         self.model = instantiate(self.model_conf, _recursive_=False)
+        self._check_disk_space()
 
 
         if self.optim_conf.frozen_module_names is not None:
