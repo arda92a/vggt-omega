@@ -51,7 +51,7 @@ def load_model(checkpoint: str, device: torch.device, route_layer: int, threshol
             "linkage": linkage,
             "route_layer": route_layer,
             "patch_pooling": "attention" if "multiscene.affinity.pool.queries" in state
-            else "mean" if "multiscene.affinity.patch_embed.weight" in state else "none",
+            else "mean" if "multiscene.affinity.patch_proj.weight" in state else "none",
             "num_queries": state["multiscene.affinity.pool.queries"].shape[0]
             if "multiscene.affinity.pool.queries" in state else 8,
             "isolate_backbone": True,

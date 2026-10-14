@@ -232,6 +232,25 @@ def test_model_with_patch_pooling() -> None:
             _check(f"{mode}: {name} patch pooling receives gradient", grad > 0.0)
 
 
+def test_stage_configs_cover_every_parameter() -> None:
+    """Freeze patterns and clipping groups are substring matches, so a new layer name can collide with them."""
+    from hydra.utils import instantiate
+    from launch import load_config
+    from train_utils.freeze import freeze_modules
+    from train_utils.gradient_clip import GradientClipper
+
+    for stage in ("multiscene_stage1", "multiscene_stage2"):
+        for mode in ("none", "mean", "attention"):
+            cfg = load_config(
+                stage,
+                ["logging.wandb_writer.enabled=false", "model.embed_dim=64", f"model.multiscene.patch_pooling={mode}"],
+            )
+            model = instantiate(cfg.model, _recursive_=False)
+            freeze_modules(model, list(cfg.optim.frozen_module_names))
+            instantiate(cfg.optim.gradient_clip).setup_clipping(model)
+            _check(f"{stage} {mode}: every trainable parameter is clipped exactly once", True)
+
+
 def test_adjusted_rand_index() -> None:
     labels = torch.tensor([0, 0, 1, 1, 2, 2])
     _check("identical", adjusted_rand_index(labels, labels) == 1.0)

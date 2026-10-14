@@ -73,7 +73,7 @@ class AffinityHead(nn.Module):
         self.pool = PatchPool(dim, patch_pooling, num_queries) if patch_pooling != "none" else None
         if self.pool is not None:
             self.patch_norm = nn.LayerNorm(self.pool.out_dim)
-            self.patch_embed = nn.Linear(self.pool.out_dim, hidden)
+            self.patch_proj = nn.Linear(self.pool.out_dim, hidden)
         self.pair = nn.Sequential(nn.Linear(2 * hidden, hidden), nn.GELU(), nn.Linear(hidden, 1))
         nn.init.normal_(self.pair[-1].weight, std=1e-2)
         nn.init.constant_(self.pair[-1].bias, _INITIAL_SAME_SCENE_LOGIT)
@@ -88,7 +88,7 @@ class AffinityHead(nn.Module):
         if self.pool is not None:
             if patch_tokens is None:
                 raise ValueError("This head pools patch tokens, so patch_tokens is required")
-            descriptor = descriptor + self.patch_embed(self.patch_norm(self.pool(patch_tokens)))
+            descriptor = descriptor + self.patch_proj(self.patch_norm(self.pool(patch_tokens)))
         difference = (descriptor[:, :, None, :] - descriptor[:, None, :, :]).abs()
         product = descriptor[:, :, None, :] * descriptor[:, None, :, :]
         logits = self.pair(torch.cat([difference, product], dim=-1)).squeeze(-1)
