@@ -18,7 +18,7 @@ from data.mixed_scene import MixedSceneCollate
 from losses.base_loss.affinity import balanced_bce, compute_affinity_loss
 from losses.loss import MultitaskLoss
 from losses.per_scene import anchor_to_first_frame, mean_over_scenes
-from multiscene_eval import clustering_scores, depth_scores, pose_scores, run_systems
+from multiscene_eval import clustering_scores, depth_scores, pose_scores, run_grouping, run_systems, source_scores
 from train_utils.report import format_epoch, train_scalars, val_comparisons, val_scalars
 from vggt_omega.models import VGGTOmega
 from vggt_omega.models.aggregator import Aggregator, _apply_by_group
@@ -148,24 +148,40 @@ def test_partition_scores() -> None:
 def test_report_formatting() -> None:
     train = {"loss_objective": 0.43, "ari": 0.87, "perfect_bags": 0.72, "pair_acc": 0.94, "gt_group_prob": 0.3, "lr": 3e-4}
     val = {
-        "predicted/ari": 0.65, "predicted/perfect_bags": 0.4, "predicted/pair_acc": 0.8, "predicted/separated": 0.9,
-        "predicted/together": 0.7, "predicted/route_ari": 0.6, "predicted/route_pair_acc": 0.75,
+        "predicted/ari": 0.65, "predicted/perfect_bags": 0.4, "predicted/pair_acc": 0.8,
+        "predicted/route_ari": 0.6, "predicted/eth3d_ari": 0.71, "predicted/replica_ari": 0.52,
         "predicted/auc_30": 0.38, "oracle/auc_30": 0.44, "plain/auc_30": 0.33,
         "predicted/abs_rel": 0.18, "oracle/abs_rel": 0.12, "plain/abs_rel": 0.2,
-        "predicted/rra_15": 0.5, "predicted/rta_15": 0.4, "stats/num_bags": 40.0, "stats/num_scenes": 2.5,
+        "stats/num_bags": 40.0, "stats/num_scenes": 2.5,
     }
     text = format_epoch(15, 20, train, val, train_seconds=615, val_seconds=170, eta_seconds=1700)
-    _check("one block", text.count("\n") >= 6 and "epoch 16/20" in text)
-    _check("readable wording", "bags split exactly right 72.0%" in text and "different scenes separated 90.0%" in text)
+    _check("one block", text.count("\n") >= 5 and "epoch 16/20" in text)
+    _check("two headline metrics", "ARI 0.870" in text and "bags split exactly right 72.0%" in text)
+    _check("per source line", "eth3d ARI 0.710 | replica ARI 0.520" in text)
     _check("three systems on one line", "predicted 0.380 | oracle 0.440 | plain 0.330" in text)
+    _check("route and pair metrics are not printed", "pairs right" not in text and "route" not in text)
 
     scalars = val_scalars(val)
-    _check("val scalars are few", len(scalars) <= 14 and "val/ari" in scalars and "val/auc_30" in scalars)
-    _check("no per-system duplicates", not any("oracle" in name or "plain" in name for name in scalars))
+    _check("val scalars", set(scalars) == {"val/ari", "val/perfect_bags", "val/eth3d_ari", "val/replica_ari", "val/auc_30", "val/abs_rel"})
+    _check("grouping-only run has no pose or depth chart", set(val_scalars({"predicted/ari": 0.5})) == {"val/ari"})
     charts = val_comparisons(val)
     _check("overlay charts", set(charts["pose_auc30"]) == {"predicted", "oracle", "plain"})
-    _check("train names", set(train_scalars(train)) >= {"train/loss", "train/ari", "train/lr"})
+    _check("train names", set(train_scalars(train)) == {"train/loss", "train/ari", "train/perfect_bags"})
     _check("validation-only block", "validation only" in format_epoch(0, 20, None, val, title="validation only"))
+
+
+def test_source_scores_and_grouping_only_run() -> None:
+    scene_id = torch.tensor([0, 0, 1, 1, 2, 2])
+    sources = ["eth3d", "eth3d", "eth3d", "eth3d", "replica", "replica"]
+    perfect = source_scores(scene_id, scene_id, sources)
+    _check("only sources with two scenes are scored", set(perfect) == {"eth3d_ari"} and perfect["eth3d_ari"] == 1.0)
+    merged = torch.tensor([0, 0, 0, 0, 1, 1])
+    _check("merging two scenes of one source is penalised", source_scores(merged, scene_id, sources)["eth3d_ari"] == 0.0)
+
+    model = _tiny_model()
+    report = run_grouping(model, _tiny_bag()[0], scene_id, sources)
+    _check("grouping-only report", set(report) == {"predicted"} and {"ari", "perfect_bags", "route_ari"} <= set(report["predicted"]))
+    _check("source score is included", "eth3d_ari" in report["predicted"])
 
 
 def test_patch_pooling_modes() -> None:

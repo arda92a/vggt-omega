@@ -17,7 +17,7 @@ import torch
 from losses.metric import rotation_angle, translation_angle
 from vggt_omega.utils.geometry import closed_form_inverse_se3
 from vggt_omega.utils.pose_enc import encoding_to_camera
-from vggt_omega.utils.scenes import as_4x4, partition_scores
+from vggt_omega.utils.scenes import adjusted_rand_index, as_4x4, partition_scores
 
 POSE_KEYS = ("rotation_deg", "translation_deg", "rra_5", "rra_15", "rta_5", "rta_15", "auc_30")
 DEPTH_KEYS = ("abs_rel", "delta125", "abs_rel_raw")
@@ -88,13 +88,41 @@ def depth_scores(predicted: torch.Tensor, target: torch.Tensor, scene_id: torch.
     }
 
 
-def score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid=10) -> dict:
+def source_scores(groups: torch.Tensor, scene_id: torch.Tensor, sources: list[str]) -> dict[str, float]:
+    """ARI among the frames of each data source, for sources with at least two scenes in the bag.
+
+    Telling an ETH3D scene from a Replica scene is easy. This measures the hard part: scenes of one source.
+    """
+    groups, scene_id = groups.reshape(-1).cpu(), scene_id.reshape(-1).cpu()
+    scores = {}
+    for source in sorted(set(sources)):
+        index = torch.tensor([i for i, name in enumerate(sources) if name == source])
+        if scene_id[index].unique().numel() >= 2:
+            scores[f"{source}_ari"] = adjusted_rand_index(groups[index], scene_id[index])
+    return scores
+
+
+def score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid=10, sources=None) -> dict:
     extrinsics, _ = encoding_to_camera(prediction["pose_enc"], image_hw, build_intrinsics=False)
     scores = pose_scores(extrinsics[0], target_extrinsics, scene_id)
     scores.update(depth_scores(prediction["depth"], target_depth, scene_id, min_valid=min_valid))
     if "group_id" in prediction:
         scores.update(clustering_scores(prediction, scene_id))
+        if sources:
+            scores.update(source_scores(prediction["group_id"], scene_id, sources))
     return scores
+
+
+@torch.inference_mode()
+def run_grouping(model: torch.nn.Module, images: torch.Tensor, scene_id: torch.Tensor, sources=None) -> dict:
+    """One forward with the predicted groups, scored on grouping only. Much cheaper than `run_systems`."""
+    images = _batch_images(images)
+    scene_id = scene_id.view(-1).to(device=images.device)
+    prediction = model(images)
+    scores = clustering_scores(prediction, scene_id)
+    if sources:
+        scores.update(source_scores(prediction["group_id"], scene_id, sources))
+    return {"predicted": scores}
 
 
 def difference(first: dict, second: dict, keys=POSE_KEYS + DEPTH_KEYS) -> dict[str, float]:
@@ -111,6 +139,7 @@ def run_systems(
     target_depth: torch.Tensor,
     min_valid: int = 10,
     include_separate: bool = True,
+    sources: list[str] | None = None,
 ) -> dict:
     """Score the predicted, oracle, plain (and optionally separate) forwards of one bag.
 
@@ -122,7 +151,7 @@ def run_systems(
     image_hw = tuple(images.shape[-2:])
 
     def score(prediction):
-        return score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid)
+        return score_prediction(prediction, scene_id, target_extrinsics, target_depth, image_hw, min_valid, sources)
 
     systems = {
         "predicted": score(model(images)),

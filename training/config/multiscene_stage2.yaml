@@ -69,6 +69,7 @@ optim:
           value: 1.0e-5
 
 validation:
+  pose_depth: true
   include_separate: true
 
 logging:
@@ -78,15 +79,7 @@ logging:
         - loss_objective
         - ari
         - perfect_bags
-        - pair_acc
-        - count_acc
-        - separated
-        - together
-        - route_ari
-        - num_scenes
         - gt_group_prob
         - loss_camera
         - loss_depth
         - loss_point
-        - Auc_30
-        - abs_rel

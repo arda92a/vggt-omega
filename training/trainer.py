@@ -453,8 +453,7 @@ class Trainer:
         for label, name in (
             ("loss", "train_loss_objective"),
             ("ARI", "train_ari"),
-            ("perfect bags", "train_perfect_bags"),
-            ("pairs right", "train_pair_acc"),
+            ("bags exactly right", "train_perfect_bags"),
         ):
             meter = meters.get(name)
             if meter is not None and meter.count:
@@ -485,7 +484,7 @@ class Trainer:
         """Score mixed bags with the predicted, oracle and plain systems. Returns rank-averaged metrics."""
         if self.val_dataset is None:
             raise RuntimeError("Validation is not configured. Set validation.enabled=true.")
-        from multiscene_eval import run_systems
+        from multiscene_eval import run_grouping, run_systems
 
         model = unwrap_ddp_if_wrapped(self.model)
         was_training = model.training
@@ -493,6 +492,7 @@ class Trainer:
         set_seeds(int(self.validation_conf.get("seed", 7)), self.max_epochs, self.rank)
         num_batches = int(self.validation_conf.get("num_batches", 50))
         include_separate = bool(self.validation_conf.get("include_separate", False))
+        pose_depth = bool(self.validation_conf.get("pose_depth", False))
 
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
@@ -511,14 +511,21 @@ class Trainer:
                         dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
                     ):
                         try:
-                            by_system = run_systems(
-                                model,
-                                batch["images"][row],
-                                batch["scene_id"][row],
-                                batch["extrinsics"][row],
-                                batch["depths"][row],
-                                include_separate=include_separate,
-                            )
+                            # Scenes are numbered in the order of the joined names, and a name starts with its source.
+                            names = batch["seq_name"][row].split("|")
+                            sources = [names[int(i)].split("_")[0] for i in batch["scene_id"][row]]
+                            if pose_depth:
+                                by_system = run_systems(
+                                    model,
+                                    batch["images"][row],
+                                    batch["scene_id"][row],
+                                    batch["extrinsics"][row],
+                                    batch["depths"][row],
+                                    include_separate=include_separate,
+                                    sources=sources,
+                                )
+                            else:
+                                by_system = run_grouping(model, batch["images"][row], batch["scene_id"][row], sources)
                         except ValueError as error:
                             logging.warning(f"Skipping validation bag: {error}")
                             continue
@@ -533,7 +540,7 @@ class Trainer:
                         first_bag = (batch["images"][row], batch["scene_id"][row])
                 running = {
                     name: sums[f"predicted/{key}"] / counts[f"predicted/{key}"]
-                    for name, key in (("ARI", "ari"), ("perfect bags", "perfect_bags"))
+                    for name, key in (("ARI", "ari"), ("bags exactly right", "perfect_bags"))
                     if counts.get(f"predicted/{key}")
                 }
                 progress.step(index + 1, running)

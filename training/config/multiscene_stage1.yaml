@@ -79,6 +79,8 @@ validation:
   num_batches: 40
   num_workers: 2
   seed: 7
+  # Pose and depth for predicted, oracle and plain. Off in stage 1, where only grouping is trained.
+  pose_depth: false
   # Also forward every scene alone, the original model's behaviour. Costs one extra pass per scene.
   include_separate: false
   mixed_scene:
@@ -151,10 +153,4 @@ logging:
         - loss_objective
         - ari
         - perfect_bags
-        - pair_acc
-        - count_acc
-        - separated
-        - together
-        - route_ari
-        - num_scenes
         - gt_group_prob

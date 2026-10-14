@@ -1,7 +1,8 @@
 """Which metrics go to wandb and the console, and how they are named and printed.
 
-Training logs the grouping scores and the loss. Validation logs the same grouping scores on held-out
-scenes, and compares three systems on pose and depth:
+The task is grouping, so two numbers carry it: ARI and the share of bags split exactly right. Validation
+adds the same two per data source (how well scenes of one source are told apart). Stage 2 also reports
+pose and depth for three systems:
 
 - predicted: inference, with the groups the model found.
 - oracle:    the same model given the true groups. The gap to `predicted` is what clustering errors cost.
@@ -10,43 +11,47 @@ scenes, and compares three systems on pose and depth:
 
 from typing import Mapping, Optional
 
-# Grouping scores, all in [0, 1]. See vggt_omega.utils.scenes.partition_scores.
-GROUPING = ("ari", "perfect_bags", "pair_acc", "count_acc", "separated", "together")
 SYSTEMS = ("predicted", "oracle", "plain")
 # (chart name, metric key). One chart overlays the three systems.
 COMPARED = (("pose_auc30", "auc_30"), ("depth_abs_rel", "abs_rel"))
 
-_TRAIN_RENAMES = {"loss_objective": "loss", "Auc_30": "auc_30"}
-
-_LABELS = {
-    "ari": ("ARI", "{:.3f}"),
-    "perfect_bags": ("bags split exactly right", "{:.1%}"),
-    "pair_acc": ("pairs right", "{:.1%}"),
-    "count_acc": ("scene count right", "{:.1%}"),
-    "separated": ("different scenes separated", "{:.1%}"),
-    "together": ("same scene kept together", "{:.1%}"),
+# Training scalars that reach wandb, and the name they get there.
+_WANDB_TRAIN = {
+    "loss_objective": "loss",
+    "ari": "ari",
+    "perfect_bags": "perfect_bags",
+    "loss_camera": "loss_camera",
+    "loss_depth": "loss_depth",
+    "loss_point": "loss_point",
 }
 
 
 def train_scalars(averages: Mapping[str, float]) -> dict[str, float]:
-    """Epoch averages of the training scalars, under `train/`."""
-    return {f"train/{_TRAIN_RENAMES.get(name, name)}": value for name, value in averages.items()}
+    """Epoch averages of the few training scalars worth a chart, under `train/`."""
+    return {f"train/{new}": averages[old] for old, new in _WANDB_TRAIN.items() if old in averages}
+
+
+def source_names(metrics: Mapping[str, float]) -> list[str]:
+    """Data sources that have a within-source score, for example eth3d."""
+    names = []
+    for key in metrics:
+        name = key[len("predicted/") : -len("_ari")]
+        if key.startswith("predicted/") and key.endswith("_ari") and name and name != "route":
+            names.append(name)
+    return sorted(names)
 
 
 def val_scalars(metrics: Mapping[str, float]) -> dict[str, float]:
-    """The validation numbers worth a chart of their own, all from the `predicted` system."""
+    """Validation charts: grouping overall and per source, plus pose and depth when they were scored."""
     scalars = {}
-    for key in GROUPING:
+    for key in ("ari", "perfect_bags"):
         if f"predicted/{key}" in metrics:
             scalars[f"val/{key}"] = metrics[f"predicted/{key}"]
-    for key in ("ari", "pair_acc"):
-        if f"predicted/route_{key}" in metrics:
-            scalars[f"val/route_{key}"] = metrics[f"predicted/route_{key}"]
-    for key in ("auc_30", "rra_15", "rta_15", "abs_rel"):
+    for source in source_names(metrics):
+        scalars[f"val/{source}_ari"] = metrics[f"predicted/{source}_ari"]
+    for key in ("auc_30", "abs_rel"):
         if f"predicted/{key}" in metrics:
             scalars[f"val/{key}"] = metrics[f"predicted/{key}"]
-    if "stats/num_bags" in metrics:
-        scalars["val/num_bags"] = metrics["stats/num_bags"]
     return scalars
 
 
@@ -75,22 +80,16 @@ def format_epoch(
         header += f"| train {_clock(train_seconds)} | val {_clock(val_seconds)} | time left {_clock(eta_seconds)} "
     lines = [header.ljust(86, "=")]
     if train:
-        lines.append("train  " + _join(_train_losses(train)))
-        lines.append("       " + _join(_grouping_parts(train, "")))
+        lines.append("train  " + _join(_train_parts(train)))
     if val:
         lines.append("val    " + _join(_grouping_parts(val, "predicted/")))
-        route = _grouping_parts(val, "predicted/route_", keys=("ari", "pair_acc"))
-        if route:
-            lines.append("       route head: " + _join(route))
+        sources = [f"{name} ARI {val[f'predicted/{name}_ari']:.3f}" for name in source_names(val)]
+        if sources:
+            lines.append("       scenes of one source told apart: " + _join(sources))
         comparisons = val_comparisons(val)
         for chart, label in (("pose_auc30", "pose AUC@30 (up)"), ("depth_abs_rel", "depth AbsRel (down)")):
             if comparisons[chart]:
                 lines.append(f"       {label:<20}" + _join([f"{name} {value:.3f}" for name, value in comparisons[chart].items()]))
-        if "predicted/rra_15" in val:
-            lines.append(
-                "       "
-                + _join([f"rotation acc@15 {val['predicted/rra_15']:.1%}", f"translation acc@15 {val['predicted/rta_15']:.1%}"])
-            )
         if "stats/num_bags" in val:
             lines.append(f"       ({int(val['stats/num_bags'])} held-out bags, {val.get('stats/num_scenes', 0):.1f} scenes each)")
     return "\n" + "\n".join(lines)
@@ -123,8 +122,12 @@ def format_data_summary(
     return "\n" + "\n".join(lines)
 
 
-def _train_losses(train: Mapping[str, float]) -> list[str]:
+_LABELS = {"ari": ("ARI", "{:.3f}"), "perfect_bags": ("bags split exactly right", "{:.1%}")}
+
+
+def _train_parts(train: Mapping[str, float]) -> list[str]:
     parts = [f"loss {train['loss_objective']:.3f}"] if "loss_objective" in train else []
+    parts += _grouping_parts(train, "")
     for key, label in (("loss_camera", "camera loss"), ("loss_depth", "depth loss"), ("loss_point", "point loss")):
         if key in train:
             parts.append(f"{label} {train[key]:.3f}")
@@ -133,10 +136,10 @@ def _train_losses(train: Mapping[str, float]) -> list[str]:
     return parts
 
 
-def _grouping_parts(values: Mapping[str, float], prefix: str, keys=GROUPING) -> list[str]:
+def _grouping_parts(values: Mapping[str, float], prefix: str) -> list[str]:
     return [
-        f"{_LABELS[key][0]} {_LABELS[key][1].format(values[prefix + key])}"
-        for key in keys
+        f"{name} {fmt.format(values[prefix + key])}"
+        for key, (name, fmt) in _LABELS.items()
         if prefix + key in values
     ]
 

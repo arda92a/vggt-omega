@@ -171,9 +171,10 @@ uv run python training/multiscene_smoke.py                                      
 Any hydra override can follow, for example `max_epochs=1`, `~data.train.dataset.dataset_configs.eden`, or
 `logging.wandb_writer.mode=offline` (`enabled=false` turns wandb off; run `wandb login` once otherwise).
 
-Wandb panels: `train/*` and `val/*`, one point per epoch, plus an affinity heat-map. Validation runs after every
-epoch on held-out scenes (`val.txt`). Grouping scores: `ari`, `perfect_bags`, `pair_acc`, `count_acc`, `separated`,
-`together`. Pose and depth (`auc_30`, `abs_rel`) are compared across `predicted`, `oracle` and `plain` in overlay charts.
+Wandb panels (one point per epoch): `train/ari`, `train/perfect_bags`, `train/loss`, and on held-out scenes
+`val/ari`, `val/perfect_bags` and `val/<source>_ari` (scenes of one source told apart, e.g. `val/replica_ari`).
+ARI is the headline: 1 means every frame is in the right scene. `perfect_bags` is the share of bags split exactly right.
+Stage 2 adds `val/auc_30` and `val/abs_rel`, with `predicted`, `oracle` and `plain` overlaid in two charts.
 
 After training, `model.predict_scenes(images)` returns one entry per scene with `images`, `anchor`, `camera_poses` and
 `pointcloud`. Bags come from `data.train.mixed_scene` (scene count, frames per scene, same-dataset negatives);
