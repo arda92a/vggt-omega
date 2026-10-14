@@ -87,8 +87,8 @@ class VGGTOmega(nn.Module):
         if scene_model is not None:
             route_layer = scene_model.route_layer
 
-            def router(scene_tokens):
-                route_state.update(scene_model.route(scene_tokens))
+            def router(scene_tokens, patch_tokens=None):
+                route_state.update(scene_model.route(scene_tokens, patch_tokens))
                 if not (isolate and self.isolate_backbone):
                     return None
                 return choose_groups(route_state["route_group_id"], scene_id, use_gt)
@@ -100,7 +100,10 @@ class VGGTOmega(nn.Module):
             aggregator_context = contextlib.nullcontext()
         with aggregator_context:
             aggregated_tokens_list, patch_token_start = self.aggregator(
-                images, router=router, route_layer=route_layer
+                images,
+                router=router,
+                route_layer=route_layer,
+                route_patches=scene_model is not None and scene_model.patch_pooling != "none",
             )
 
         final_tokens = aggregated_tokens_list[-1]
@@ -201,6 +204,8 @@ def _build_multiscene(config: dict | None, dim: int) -> MultiScene | None:
         threshold=float(config.get("threshold", 0.5)),
         linkage=str(config.get("linkage", "average")),
         route_layer=int(config.get("route_layer", 11)),
+        patch_pooling=str(config.get("patch_pooling", "none")),
+        num_queries=int(config.get("num_queries", 8)),
     )
 
 

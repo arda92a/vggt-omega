@@ -16,6 +16,10 @@ defaults:
 exp_name: vggt_omega_multiscene_stage2
 max_epochs: 10
 
+# Must come from the command line: the stage 1 checkpoint, not the released weights.
+checkpoint:
+  model_weight_path: null
+
 model:
   multiscene:
     isolate_camera: true

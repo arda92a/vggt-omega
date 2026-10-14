@@ -3,9 +3,9 @@
 # only supervision is "which frames share a scene".
 #
 # From the repository root:
-#   uv run python train.py --config multiscene_stage1 --data-dir /path/to/unified/merged \
-#     checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt
+#   uv run python train.py --config multiscene_stage1 --data-dir /path/to/unified/merged
 #
+# The backbone is frozen, so it must start from the released weights (checkpoint.model_weight_path below).
 # The data dir (--data-dir, else $MERGED_DIR, else the MERGED_DIR folder) holds one folder per scene plus train.txt and val.txt, written by
 # training/dataset_preparation/split_sequences.py. Validation reads val.txt only.
 # Offline wandb: logging.wandb_writer.mode=offline. Off: logging.wandb_writer.enabled=false.
@@ -18,6 +18,9 @@ exp_name: vggt_omega_multiscene_stage1
 max_epochs: 20
 limit_train_batches: 500
 
+checkpoint:
+  model_weight_path: checkpoints/vggt_omega_1b_512.pt
+
 model:
   multiscene:
     enabled: true
@@ -26,6 +29,10 @@ model:
     num_heads: 16
     # Aggregator block after which the route head clusters frames. Later blocks attend inside a group.
     route_layer: 11
+    # What the affinity heads see besides the 16 scene tokens: none, mean (patch-token average), or
+    # attention (num_queries learned queries over the patch tokens).
+    patch_pooling: none
+    num_queries: 8
     isolate_backbone: true
     # Pose loss is off in this stage, so the camera head still sees the whole bag.
     isolate_camera: false

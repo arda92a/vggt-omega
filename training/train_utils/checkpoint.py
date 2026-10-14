@@ -48,11 +48,11 @@ def load_checkpoint(path: str, map_location="cpu") -> Dict[str, Any]:
     return torch.load(path, map_location=map_location, weights_only=False)
 
 
-def load_model_weights(model: nn.Module, path: str, strict: bool = False) -> None:
+def load_model_weights(model: nn.Module, path: str, strict: bool = False) -> tuple[list, list]:
     """Initialise weights from a checkpoint without restoring optimizer or epoch state.
 
     Reads the 'model' entry if present, otherwise treats the file as a bare state dict, which
-    is what the released inference checkpoints are.
+    is what the released inference checkpoints are. Returns (missing keys, unexpected keys).
     """
     checkpoint = load_checkpoint(path)
     state_dict = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
@@ -63,6 +63,7 @@ def load_model_weights(model: nn.Module, path: str, strict: bool = False) -> Non
         logging.debug(f"Missing keys (first 20): {missing[:20]}")
     if unexpected:
         logging.debug(f"Unexpected keys (first 20): {unexpected[:20]}")
+    return list(missing), list(unexpected)
 
 
 def _initialize_aggregator_blocks_from_dinov3(aggregator: nn.Module) -> None:

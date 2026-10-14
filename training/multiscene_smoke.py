@@ -168,6 +168,70 @@ def test_report_formatting() -> None:
     _check("validation-only block", "validation only" in format_epoch(0, 20, None, val, title="validation only"))
 
 
+def test_patch_pooling_modes() -> None:
+    torch.manual_seed(0)
+    registers = torch.randn(2, 5, 16, 32)
+    patches = torch.randn(2, 5, 12, 32)
+    for mode in ("none", "mean", "attention"):
+        head = AffinityHead(dim=32, patch_pooling=mode, num_queries=3)
+        affinity, logits = head(registers, patches if mode != "none" else None)
+        _check(f"{mode}: shapes", affinity.shape == (2, 5, 5) and logits.shape == (2, 5, 5))
+        _check(f"{mode}: symmetric", torch.allclose(affinity, affinity.transpose(-1, -2), atol=1e-6))
+    try:
+        AffinityHead(dim=32, patch_pooling="mean")(registers)
+    except ValueError:
+        _check("pooled head needs patch tokens", True)
+    else:
+        _check("pooled head needs patch tokens", False)
+    try:
+        AffinityHead(dim=32, patch_pooling="max")
+    except ValueError:
+        _check("unknown pooling rejected", True)
+    else:
+        _check("unknown pooling rejected", False)
+
+    # Patches carry the only signal: same-scene frames share a patch mean, registers are noise.
+    scene_id = torch.tensor([0] * 4 + [1] * 4 + [2] * 4)
+    target = (scene_id[:, None] == scene_id[None, :]).float()[None]
+    centers = torch.randn(3, 32) * 2
+    for mode in ("mean", "attention"):
+        head = AffinityHead(dim=32, patch_pooling=mode, num_queries=2)
+        optimizer = torch.optim.Adam(head.parameters(), lr=1e-2)
+        for _ in range(300):
+            noise = torch.randn(1, 12, 16, 32)
+            patch = centers[scene_id][None, :, None, :] + 0.3 * torch.randn(1, 12, 20, 32)
+            _, logits = head(noise, patch)
+            loss = balanced_bce(logits, target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        affinity, _ = head(torch.randn(1, 12, 16, 32), centers[scene_id][None, :, None, :] + 0.3 * torch.randn(1, 12, 20, 32))
+        ari = adjusted_rand_index(scene_groups(affinity.detach(), 0.5)[0], scene_id)
+        _check(f"{mode}: groups scenes from patch tokens alone", ari > 0.9)
+
+
+def test_model_with_patch_pooling() -> None:
+    for mode in ("mean", "attention"):
+        reference = VGGTOmega(**TINY).eval()
+        candidate = VGGTOmega(**TINY, multiscene={**TINY_SCENE, "patch_pooling": mode, "num_queries": 2}).eval()
+        missing, unexpected = candidate.load_state_dict(reference.state_dict(), strict=False)
+        _check(f"{mode}: only new keys are missing", not unexpected and all(k.startswith("multiscene.") for k in missing))
+        images = _tiny_bag()
+        with torch.no_grad():
+            gap = prediction_gap(reference(images), candidate(images))
+        _check(f"{mode}: one scene still matches the original", gap["pose_enc"]["max"] < 1e-4 and gap["depth"]["max"] < 1e-4)
+
+        candidate.train()
+        batch = _bag_batch()
+        predictions = candidate(batch["images"], scene_id=batch["scene_id"])
+        loss = compute_affinity_loss(predictions, batch)["loss_affinity"]
+        loss.backward()
+        for name in ("route_affinity", "affinity"):
+            head = getattr(candidate.multiscene, name)
+            grad = sum(float(p.grad.abs().sum()) for p in head.pool.parameters() if p.grad is not None)
+            _check(f"{mode}: {name} patch pooling receives gradient", grad > 0.0)
+
+
 def test_adjusted_rand_index() -> None:
     labels = torch.tensor([0, 0, 1, 1, 2, 2])
     _check("identical", adjusted_rand_index(labels, labels) == 1.0)
@@ -231,7 +295,7 @@ def test_aggregator_attends_inside_groups_after_the_route_layer() -> None:
     aggregator._inter_frame_attention = spy
     groups = torch.tensor([[0, 0, 1, 1, 1, 2]])
     with torch.no_grad():
-        aggregator(_tiny_bag(), router=lambda scene_tokens: groups, route_layer=5)
+        aggregator(_tiny_bag(), router=lambda scene_tokens, patch_tokens=None: groups, route_layer=5)
     before = {frames for index, frames in seen if index <= 5}
     after = {frames for index, frames in seen if index > 5}
     _check("full bag up to the route layer", before == {6})

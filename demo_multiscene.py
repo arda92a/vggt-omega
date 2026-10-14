@@ -50,6 +50,10 @@ def load_model(checkpoint: str, device: torch.device, route_layer: int, threshol
             "threshold": threshold,
             "linkage": linkage,
             "route_layer": route_layer,
+            "patch_pooling": "attention" if "multiscene.affinity.pool.queries" in state
+            else "mean" if "multiscene.affinity.patch_embed.weight" in state else "none",
+            "num_queries": state["multiscene.affinity.pool.queries"].shape[0]
+            if "multiscene.affinity.pool.queries" in state else 8,
             "isolate_backbone": True,
             "isolate_camera": True,
         },
@@ -178,7 +182,7 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--linkage", default="average", choices=["average", "single", "complete"])
     parser.add_argument("--max-images", type=int, default=24)
-    parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--port", type=int, help="default: the first free port from 7860")
     args = parser.parse_args()
 
     device = pick_device(args.device)

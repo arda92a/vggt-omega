@@ -333,6 +333,15 @@ class Trainer:
         for overlapping parameters.
         """
         dinov3_path = self.checkpoint_conf.dinov3_weight_path
+        if (
+            "aggregator" in (self.optim_conf.frozen_module_names or [])
+            and dinov3_path is None
+            and self.checkpoint_conf.model_weight_path is None
+        ):
+            raise ValueError(
+                "The aggregator is frozen but no weights are set, so it would stay randomly initialised. "
+                "Pass checkpoint.model_weight_path=<checkpoint>."
+            )
         if dinov3_path is not None:
             logging.info(f"Initialising aggregator.patch_embed from DINOv3 weights at {dinov3_path}")
             load_dinov3_weights(
@@ -343,13 +352,24 @@ class Trainer:
 
         path = self.checkpoint_conf.model_weight_path
         if path is None:
+            if dinov3_path is None:
+                logging.warning("NO PRETRAINED WEIGHTS: the model starts from random initialisation.")
             return
         logging.info(f"Initialising model weights from {path}")
-        load_model_weights(
+        missing, unexpected = load_model_weights(
             self.model,
             path,
             strict=self.checkpoint_conf.model_weight_strict,
         )
+        # Only the multi-scene heads are new. Any other key that failed to load is a real problem.
+        not_loaded = [key for key in missing if not key.startswith("multiscene.")]
+        if not_loaded or unexpected:
+            logging.warning(
+                f"WEIGHTS NOT FULLY LOADED from {path}: {len(not_loaded)} model weights missing "
+                f"(e.g. {not_loaded[:3]}), {len(unexpected)} checkpoint weights unused (e.g. {unexpected[:3]})."
+            )
+        else:
+            logging.info(f"Pretrained weights loaded. {len(missing)} multi-scene weights start from scratch.")
 
     def run(self):
         self._log_data_summary()

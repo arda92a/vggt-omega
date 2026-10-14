@@ -21,29 +21,74 @@ import torch.nn.functional as F
 
 NUM_SCENE_TOKENS = 16
 LINKAGES = ("average", "single", "complete")
+PATCH_POOLINGS = ("none", "mean", "attention")
 _INITIAL_SAME_SCENE_LOGIT = 4.0
 
 
-class AffinityHead(nn.Module):
-    """Pairwise same-scene logit from the mean scene token of each frame.
+class PatchPool(nn.Module):
+    """One descriptor per frame from its patch tokens (B, N, P, C).
 
-    The pair feature is [|d_i - d_j|, d_i * d_j]. A linear layer on [d_i ; d_j] would
-    reduce to s_i + s_j and could not compare two frames at all.
+    `mean` averages the normalised patch tokens. `attention` lets learned queries attend over the
+    patches, which keeps part of the spatial layout. Cost is linear in the number of patches.
     """
 
-    def __init__(self, dim: int, hidden: int = 256) -> None:
+    def __init__(self, dim: int, mode: str, num_queries: int = 8, attn_dim: int = 128) -> None:
         super().__init__()
+        self.mode = mode
+        self.norm = nn.LayerNorm(dim)
+        if mode == "attention":
+            self.key = nn.Linear(dim, attn_dim)
+            self.value = nn.Linear(dim, attn_dim)
+            self.queries = nn.Parameter(torch.randn(num_queries, attn_dim) * attn_dim**-0.5)
+            self.attn_dim = attn_dim
+            self.out_dim = num_queries * attn_dim
+        else:
+            self.out_dim = dim
+
+    def forward(self, patch_tokens: torch.Tensor) -> torch.Tensor:
+        if patch_tokens.ndim != 4:
+            raise ValueError(f"Expected patch tokens (B, N, P, C), got {tuple(patch_tokens.shape)}")
+        tokens = self.norm(patch_tokens.float())
+        if self.mode == "mean":
+            return tokens.mean(dim=2)
+        scores = torch.einsum("qa,bnpa->bnqp", self.queries, self.key(tokens)) / self.attn_dim**0.5
+        pooled = torch.einsum("bnqp,bnpa->bnqa", scores.softmax(dim=-1), self.value(tokens))
+        return pooled.flatten(start_dim=2)
+
+
+class AffinityHead(nn.Module):
+    """Pairwise same-scene logit from a descriptor of each frame.
+
+    The descriptor is the mean scene token, plus a pooled patch-token term when `patch_pooling`
+    is `mean` or `attention`. The pair feature is [|d_i - d_j|, d_i * d_j]. A linear layer on
+    [d_i ; d_j] would reduce to s_i + s_j and could not compare two frames at all.
+    """
+
+    def __init__(self, dim: int, hidden: int = 256, patch_pooling: str = "none", num_queries: int = 8) -> None:
+        super().__init__()
+        if patch_pooling not in PATCH_POOLINGS:
+            raise ValueError(f"patch_pooling must be one of {PATCH_POOLINGS}, got {patch_pooling!r}")
         self.norm = nn.LayerNorm(dim)
         self.embed = nn.Linear(dim, hidden)
+        self.pool = PatchPool(dim, patch_pooling, num_queries) if patch_pooling != "none" else None
+        if self.pool is not None:
+            self.patch_norm = nn.LayerNorm(self.pool.out_dim)
+            self.patch_embed = nn.Linear(self.pool.out_dim, hidden)
         self.pair = nn.Sequential(nn.Linear(2 * hidden, hidden), nn.GELU(), nn.Linear(hidden, 1))
         nn.init.normal_(self.pair[-1].weight, std=1e-2)
         nn.init.constant_(self.pair[-1].bias, _INITIAL_SAME_SCENE_LOGIT)
 
-    def forward(self, scene_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, scene_tokens: torch.Tensor, patch_tokens: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (affinity, logits), both (B, N, N). Affinity has a 1 diagonal."""
         if scene_tokens.ndim != 4:
             raise ValueError(f"Expected scene tokens (B, N, 16, C), got {tuple(scene_tokens.shape)}")
         descriptor = self.embed(self.norm(scene_tokens.float().mean(dim=2)))
+        if self.pool is not None:
+            if patch_tokens is None:
+                raise ValueError("This head pools patch tokens, so patch_tokens is required")
+            descriptor = descriptor + self.patch_embed(self.patch_norm(self.pool(patch_tokens)))
         difference = (descriptor[:, :, None, :] - descriptor[:, None, :, :]).abs()
         product = descriptor[:, :, None, :] * descriptor[:, None, :, :]
         logits = self.pair(torch.cat([difference, product], dim=-1)).squeeze(-1)
@@ -108,6 +153,8 @@ class MultiScene(nn.Module):
         threshold: float = 0.5,
         linkage: str = "average",
         route_layer: int = 11,
+        patch_pooling: str = "none",
+        num_queries: int = 8,
     ) -> None:
         super().__init__()
         if linkage not in LINKAGES:
@@ -115,14 +162,15 @@ class MultiScene(nn.Module):
         self.threshold = float(threshold)
         self.linkage = linkage
         self.route_layer = int(route_layer)
-        self.route_affinity = AffinityHead(dim)
-        self.affinity = AffinityHead(dim)
+        self.patch_pooling = patch_pooling
+        self.route_affinity = AffinityHead(dim, patch_pooling=patch_pooling, num_queries=num_queries)
+        self.affinity = AffinityHead(dim, patch_pooling=patch_pooling, num_queries=num_queries)
         self.scene_attention = SceneAttention(dim, num_heads=num_heads)
 
-    def route(self, scene_tokens: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Cluster frames from the scene tokens of the route layer. Input is (B, N, 16, C)."""
+    def route(self, scene_tokens: torch.Tensor, patch_tokens: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+        """Cluster frames from the tokens of the route layer. Scene tokens are (B, N, 16, C), patch tokens (B, N, P, C)."""
         with torch.autocast(device_type=_device_type(scene_tokens), enabled=False):
-            affinity, logits = self.route_affinity(scene_tokens)
+            affinity, logits = self.route_affinity(scene_tokens, patch_tokens)
         return {
             "route_affinity": affinity,
             "route_affinity_logits": logits,
@@ -151,7 +199,8 @@ class MultiScene(nn.Module):
 
         with torch.autocast(device_type=_device_type(tokens), enabled=False):
             scene_tokens = tokens[:, :, 1:patch_token_start].float()
-            affinity, logits = self.affinity(scene_tokens)
+            patch_tokens = tokens[:, :, patch_token_start:] if self.patch_pooling != "none" else None
+            affinity, logits = self.affinity(scene_tokens, patch_tokens)
             predicted = scene_groups(affinity.detach(), self.threshold, self.linkage)
             if isolate:
                 used = choose_groups(predicted, scene_id, use_gt)
@@ -159,7 +208,7 @@ class MultiScene(nn.Module):
                 used = torch.zeros_like(predicted)
             same_group = used[:, :, None] == used[:, None, :]
             updated = self.scene_attention(scene_tokens, same_group)
-            output_affinity, output_logits = self.affinity(updated)
+            output_affinity, output_logits = self.affinity(updated, patch_tokens)
 
         tokens = torch.cat(
             [tokens[:, :, :1], updated.to(dtype=tokens.dtype), tokens[:, :, patch_token_start:]],

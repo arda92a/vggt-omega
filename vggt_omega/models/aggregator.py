@@ -116,13 +116,15 @@ class Aggregator(nn.Module):
     def forward(
         self,
         images: torch.Tensor,
-        router: Callable[[torch.Tensor], torch.Tensor | None] | None = None,
+        router: Callable[..., torch.Tensor | None] | None = None,
         route_layer: int | None = None,
+        route_patches: bool = False,
     ) -> tuple[list[torch.Tensor | None], int]:
         """Run the alternating-attention blocks.
 
-        After block `route_layer`, `router` receives the scene tokens (B, N, 16, 2C) and may
-        return group ids (B, N). Inter-frame attention in every later block then runs inside
+        After block `route_layer`, `router(scene_tokens, patch_tokens)` receives the scene tokens
+        (B, N, 16, 2C), and the patch tokens (B, N, P, 2C) when `route_patches` is set (else None).
+        It may return group ids (B, N). Inter-frame attention in every later block then runs inside
         each group only. Returning None keeps all frames in one attention.
         """
         batch_size, num_frames, num_channels, height, width = images.shape
@@ -180,7 +182,11 @@ class Aggregator(nn.Module):
             if router is not None and block_idx == route_layer:
                 scene_slice = slice(1, self.patch_token_start)
                 scene_tokens = torch.cat([frame_tokens[:, :, scene_slice], tokens[:, :, scene_slice]], dim=-1)
-                group_id = router(scene_tokens)
+                patch_tokens = None
+                if route_patches:
+                    start = self.patch_token_start
+                    patch_tokens = torch.cat([frame_tokens[:, :, start:], tokens[:, :, start:]], dim=-1)
+                group_id = router(scene_tokens, patch_tokens)
 
         return outputs, self.patch_token_start
 
