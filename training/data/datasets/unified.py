@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import os.path as osp
 import logging
 import random
@@ -84,8 +85,13 @@ class UnifiedDataset(BaseDataset):
         skip_first_ids=-1,
         frame_window_policy=None,
         revisit_policy=REVISIT_POLICY_ALLOW,
+        frames_only=False,
     ):
         super().__init__(common_conf=common_conf)
+
+        # Scenes are folders of images only. Depth and pose are placeholders, so only grouping can train on them.
+        self.frames_only = frames_only
+        disable_depth_loss = disable_depth_loss or frames_only
 
         self.min_valid_depth_ratio = min_valid_depth_ratio
         self.training = common_conf.training
@@ -291,11 +297,14 @@ class UnifiedDataset(BaseDataset):
 
         # Load image_names from JSON file
         image_names_path = osp.join(seq_path, self.image_names_filename)
-        try:
-            with open(image_names_path, "r") as f:
-                image_names = json.load(f)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Error decoding JSON from {image_names_path}") from e
+        if self.frames_only and not osp.exists(image_names_path):
+            image_names = _list_images(osp.join(seq_path, "images"))
+        else:
+            try:
+                with open(image_names_path, "r") as f:
+                    image_names = json.load(f)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Error decoding JSON from {image_names_path}") from e
 
         num_imgs = len(image_names)
 
@@ -350,7 +359,7 @@ class UnifiedDataset(BaseDataset):
             ids = ids + skip
             num_imgs = num_imgs + skip
 
-        if not self.per_frame_anno:
+        if not self.per_frame_anno and not self.frames_only:
             # Load cam_from_worlds from NPY file
             cam_from_worlds_path = osp.join(seq_path, self.cam_from_worlds_filename)
             cam_from_worlds = read_npy_wrapper(cam_from_worlds_path)  # Shape: (N, 3, 4)
@@ -404,7 +413,9 @@ class UnifiedDataset(BaseDataset):
             )
 
             # Get camera parameters for this frame
-            if self.per_frame_anno:
+            if self.frames_only:
+                extri, intri = _placeholder_camera(image)
+            elif self.per_frame_anno:
                 intri = intri_frame.astype(np.float32)
                 extri = extri_frame
             else:
@@ -622,6 +633,11 @@ class UnifiedDataset(BaseDataset):
         # Read image
         image = read_image_cv2(img_path)
 
+        if self.frames_only:
+            if image is None:
+                raise ValueError(f"Cannot read image {img_path}")
+            return image, np.zeros(image.shape[:2], dtype=np.float32), img_path, depth_path, None, None
+
         depth_map = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
         depth_map = self._apply_depth_zero_mask(
             depth_map=depth_map,
@@ -683,6 +699,23 @@ class UnifiedDataset(BaseDataset):
             return np.zeros_like(depth_map)
 
         return np.where(invalid_mask, 0.0, depth_map)
+
+
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+
+def _list_images(image_dir):
+    names = sorted(n for n in os.listdir(image_dir) if n.lower().endswith(_IMAGE_EXTENSIONS))
+    if not names:
+        raise FileNotFoundError(f"No images found in {image_dir}")
+    return names
+
+
+def _placeholder_camera(image):
+    """Identity pose and a pinhole with focal = longer side. Never supervised."""
+    h, w = image.shape[:2]
+    intri = np.array([[max(h, w), 0, w / 2], [0, max(h, w), h / 2], [0, 0, 1]], dtype=np.float32)
+    return np.eye(4, dtype=np.float32)[:3], intri
 
 
 def _validate_image_depth_pair(image, depth_map, img_path, depth_path, seq_name, idx):

@@ -1,0 +1,30 @@
+# Stage 1 with an extra images-only dataset (no depth, no pose). Grouping needs only the scene label.
+# Layout: RETAIL_DIR/retail_<name>/images/*.jpg, one folder per sequence. The folder name must start
+# with "retail_" so validation reports val/retail_ari. 90% of the folders train, 10% validate.
+# Stage 2 must not use this config: it has no depth or pose.
+#
+#   uv run python training/dataset_preparation/prepare_retail.py retail_data RETAIL_DIR
+#   uv run python train.py --config multiscene_stage1_retail      # reads ./RETAIL_DIR, or $RETAIL_DIR
+
+defaults:
+  - multiscene_stage1
+  - _self_
+
+exp_name: vggt_omega_multiscene_stage1_retail
+
+data:
+  train:
+    dataset:
+      dataset_configs:
+        retail:
+          _target_: data.datasets.unified.UnifiedDataset
+          UNIFIED_DIR: ${oc.env:RETAIL_DIR,RETAIL_DIR}
+          frames_only: true
+          train_split_ratio: 0.9
+          dataset_prefix: _retail
+          is_synthetic: false
+          mixture_weight: 100
+          mixture_weight_scale: 1.0
+          frame_window: 64
+          sample_by_index: true
+          revisit_policy: avoid_if_possible
