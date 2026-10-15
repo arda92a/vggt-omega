@@ -442,6 +442,15 @@ class Trainer:
         every = int(self.validation_conf.get("every_n_epochs", 1))
         return (int(self.epoch) + 1) % every == 0 or int(self.epoch) + 1 == self.max_epochs
 
+    def _save_best(self, epoch: int, val: Optional[Dict[str, float]]) -> None:
+        key = self.checkpoint_conf.best_metric
+        if not key or not val or key not in val or val[key] <= self.best_score:
+            return
+        self.best_score = val[key]
+        self.save_checkpoint(epoch, ["best"])
+        if self.rank == 0:
+            logging.info(f"New best {key} {val[key]:.3f} at epoch {epoch + 1}, saved best.pt")
+
     def _progress(self, total: int, desc: str) -> Progress:
         """Rank 0 shows progress. A terminal gets a bar, a log file gets a line every `console_every` steps."""
         every = int(getattr(self.logging_conf, "console_every", 100))
@@ -622,6 +631,7 @@ class Trainer:
                 val_metrics = self.run_validation(int(self.epoch))
                 val_seconds = time.time() - started
             self._report_epoch(int(self.epoch), train_metrics, val_metrics, train_seconds, val_seconds)
+            self._save_best(int(self.epoch), val_metrics)
 
             del dataloader
             gc.collect()
@@ -946,6 +956,7 @@ class Trainer:
 
         self.epoch = self.start_epoch
         self.steps = {"train": 0}
+        self.best_score = float("-inf")
 
         self.tb_writer = instantiate(self.logging_conf.tensorboard_writer)
         self.wandb_writer = (

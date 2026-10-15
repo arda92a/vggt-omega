@@ -63,6 +63,8 @@ class TrainerCheckpointConf:
     # or epoch state.
     model_weight_path: Optional[str] = None
     model_weight_strict: bool = False
+    # Validation metric (higher is better) that decides best.pt, for example predicted/ari. None disables it.
+    best_metric: Optional[str] = "predicted/ari"
 
 
 @dataclass

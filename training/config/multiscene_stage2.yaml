@@ -7,7 +7,7 @@
 #
 # From the repository root:
 #   MERGED_DIR=... uv run python train.py --config multiscene_stage2 \
-#     checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt
+#     checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/best.pt
 
 defaults:
   - multiscene_stage1
@@ -19,6 +19,7 @@ max_epochs: 10
 # Must come from the command line: the stage 1 checkpoint, not the released weights.
 checkpoint:
   model_weight_path: null
+  best_metric: predicted/auc_30
 
 model:
   multiscene:

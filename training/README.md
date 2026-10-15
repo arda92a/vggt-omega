@@ -161,7 +161,7 @@ export MERGED_DIR=/path/to/unified/merged   # scenes such as eth3d_*, replica_*;
 uv run python training/dataset_preparation/split_sequences.py $MERGED_DIR --val-per-source 6   # writes train.txt, val.txt
 uv run python train.py checkpoint.model_weight_path=checkpoints/vggt_omega_1b_512.pt          # stage 1
 uv run python train.py --config multiscene_stage2 \
-    checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/checkpoint.pt   # stage 2 (use the stage 1 folder of your run, e.g. ..._stage1_2)
+    checkpoint.model_weight_path=logs/vggt_omega_multiscene_stage1/checkpoints/best.pt   # stage 2 (use the stage 1 folder of your run, e.g. ..._stage1_2)
 uv run torchrun --nproc_per_node=8 train.py ...                                               # several GPUs
 uv run python train.py --eval-only checkpoint.model_weight_path=...                           # validation only
 uv run python training/multiscene_smoke.py                                                    # CPU checks
@@ -185,7 +185,7 @@ a bag uses as many scenes as the loader batch allows, up to `max(num_scenes_rang
 Copy a checkpoint from the server and open the viewer on your own machine:
 
 ```bash
-scp train@SERVER:~/arda/vggt-omega/logs/<run>/checkpoints/checkpoint.pt checkpoints/multiscene.pt
+scp train@SERVER:~/arda/vggt-omega/logs/<run>/checkpoints/best.pt checkpoints/multiscene.pt
 uv run --extra ui python demo_multiscene.py --checkpoint checkpoints/multiscene.pt
 ```
 
