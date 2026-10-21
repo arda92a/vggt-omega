@@ -1,0 +1,14 @@
+# Settings of panorama/make_bags.py. Anything given on the command line wins over this file.
+roots: [RETAIL_DIR, MERGED_DIR]   # folders of scene folders, missing ones are skipped
+sources: [retail]                      # for example [retail] to keep one source only
+out: bags_eval
+num_bags: 200                      # ignored by partition
+scenes: [2, 4]                     # scenes per bag, min and max
+frames: all                        # frames per scene, [min, max] or all. partition always uses all
+max_frames: 16                     # cap on the whole bag
+same_source_prob: 0.5              # chance that all scenes of a bag come from one source
+scene_sampling: partition          # partition: every scene once, all frames. balanced / random: sampled bags
+frame_pick: random                 # random, or consecutive: a run of neighbouring frames
+seed: 0
+link: copy                         # copy (real files), symlink or none
+thumb_size: 256

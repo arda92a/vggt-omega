@@ -1,0 +1,35 @@
+# Scene router training. Any key can be overridden on the command line: key=value
+# uv run python -m scene_router.train --config scene_router/config.yaml epochs=5 wandb=true
+
+# data (made by scene_router/make_bags.py)
+data_dir: scene_router/data
+height: 448            # every frame is resized whole to height x width, no crop
+width: 336             # most Stitch_Requests frames are portrait 1500x2000 (3:4)
+workers: 4
+
+# model
+arch: vits16           # vits16 | vitb16 | vitl16
+weights: ~/Downloads/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+train_blocks: 2        # last DINOv3 blocks to fine-tune, 0 keeps the backbone frozen
+dim: 256               # width of the router head
+context_layers: 2      # transformer layers over the frames of a bag, 0 compares frames on their own
+
+# training
+epochs: 20
+epoch_bags: 1000       # train bags drawn per epoch (null: all of train.json)
+bags_per_batch: 4
+lr: 3.0e-4             # router head
+backbone_lr: 2.0e-5    # fine-tuned DINOv3 blocks
+weight_decay: 0.05
+warmup_steps: 200
+grad_clip: 1.0
+threshold: 0.5         # pair probability at which frames are grouped, for ARI and perfect bag
+seed: 0
+device: auto           # auto | cuda | mps | cpu
+amp: true              # bf16 autocast on cuda
+
+# output
+out: outputs/scene_router/dinov3_vits16
+wandb: false
+wandb_project: scene-router
+wandb_name: null

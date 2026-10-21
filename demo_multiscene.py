@@ -19,7 +19,12 @@ import torch
 from PIL import Image, ImageDraw
 
 from vggt_omega.models import VGGTOmega
+from vggt_omega.models.multiscene import scene_groups
+from vggt_omega.utils.baseline import patch_feature_affinity
 from vggt_omega.utils.load_fn import load_and_preprocess_images
+
+LEARNED = "Learned heads"
+BASELINE = "Baseline: patch cosine (no training)"
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#16a5a5", "#d4a017", "#f032e6", "#7f7f00", "#808080"]
 IMAGE_TYPES = [".jpg", ".jpeg", ".png", ".webp", ".bmp"]
@@ -40,7 +45,12 @@ def load_model(checkpoint: str, device: torch.device, route_layer: int, threshol
     state = loaded.get("model", loaded) if isinstance(loaded, dict) else loaded
     del loaded
     if not any(key.startswith("multiscene.") for key in state):
-        raise SystemExit(f"{checkpoint} has no multiscene.* weights. Use a checkpoint from train.py.")
+        print(f"{checkpoint} has no multiscene.* weights: only the baseline method is available.")
+        model = VGGTOmega(enable_camera=False, enable_depth=False)
+        result = model.load_state_dict(state, strict=False)
+        if any(key.startswith("aggregator.") for key in result.missing_keys):
+            raise SystemExit(f"{checkpoint} is missing aggregator weights")
+        return model.to(device).eval()
     model = VGGTOmega(
         embed_dim=state["aggregator.camera_token"].shape[-1],
         autocast=device.type == "cuda",
@@ -63,13 +73,28 @@ def load_model(checkpoint: str, device: torch.device, route_layer: int, threshol
 
 
 @torch.inference_mode()
-def group_frames(model: VGGTOmega, paths: list[str], resolution: int, threshold: float, linkage: str) -> dict:
+def group_frames(
+    model: VGGTOmega, paths: list[str], resolution: int, threshold: float, linkage: str,
+    method: str = LEARNED, baseline_layer: int = 4, baseline_threshold: float = 0.9,
+) -> dict:
+    """Group frames. `maps` are the (title, matrix in [0, 1]) heatmaps to draw, `group_id` the predicted scenes."""
     device = next(model.parameters()).device
     images = load_and_preprocess_images(paths, mode="balanced", image_resolution=resolution).to(device)
+    if method == BASELINE:
+        affinity = patch_feature_affinity(model.aggregator, images, baseline_layer)
+        groups = scene_groups(affinity[None], float(baseline_threshold), linkage)[0]
+        off_diagonal = affinity[~torch.eye(len(affinity), dtype=torch.bool)]
+        low, high = float(off_diagonal.min()), float(off_diagonal.max())
+        stretched = ((affinity - low) / max(high - low, 1e-6)).clamp(0, 1)
+        return {"group_id": groups, "maps": [(f"patch cosine, layer {baseline_layer} (stretched {low:.2f}-{high:.2f})", stretched.numpy())]}
+    if model.multiscene is None:
+        raise gr.Error("This checkpoint has no multi-scene weights. Use the baseline method.")
     model.multiscene.threshold = float(threshold)
     model.multiscene.linkage = linkage
     prediction = model(images)
-    return {key: prediction[key][0].float().cpu() for key in ("affinity", "route_affinity", "group_id", "route_group_id")}
+    result = {key: prediction[key][0].float().cpu() for key in ("affinity", "route_affinity", "group_id")}
+    result["maps"] = [("final affinity", result["affinity"].numpy()), ("route affinity", result["route_affinity"].numpy())]
+    return result
 
 
 # ---------------------------------------------------------------- views
@@ -121,14 +146,11 @@ def _heat_tile(title: str, matrix: np.ndarray, order: np.ndarray, groups: np.nda
 
 
 def affinity_image(result: dict) -> np.ndarray:
-    """Final and route affinity with frames sorted by predicted scene. White lines mark scene borders."""
+    """The affinity maps with frames sorted by predicted scene. White lines mark scene borders."""
     groups = result["group_id"].numpy()
     order = np.lexsort((np.arange(len(groups)), groups))
     cell = max(10, min(40, 480 // max(len(groups), 1)))
-    tiles = [
-        _heat_tile("final affinity", result["affinity"].numpy(), order, groups, cell),
-        _heat_tile("route affinity", result["route_affinity"].numpy(), order, groups, cell),
-    ]
+    tiles = [_heat_tile(title, matrix, order, groups, cell) for title, matrix in result["maps"]]
     canvas = Image.new("RGB", (sum(t.width for t in tiles) + 8 * (len(tiles) - 1), tiles[0].height), (30, 30, 30))
     x = 0
     for tile in tiles:
@@ -137,14 +159,14 @@ def affinity_image(result: dict) -> np.ndarray:
     return np.asarray(canvas)
 
 
-def run_bag(model, files, resolution, threshold, linkage, max_images):
+def run_bag(model, files, resolution, threshold, linkage, max_images, method, baseline_layer, baseline_threshold):
     paths = [str(f if isinstance(f, (str, Path)) else f.name) for f in (files or [])]
     if len(paths) < 2:
         raise gr.Error("Give at least 2 images.")
     if len(paths) > max_images:
         raise gr.Error(f"{len(paths)} images is more than --max-images {max_images}.")
     started = time.time()
-    result = group_frames(model, paths, int(resolution), threshold, linkage)
+    result = group_frames(model, paths, int(resolution), threshold, linkage, method, int(baseline_layer), baseline_threshold)
     groups = result["group_id"]
     sizes = sorted((int((groups == g).sum()) for g in groups.unique()), reverse=True)
     summary = f"**{len(paths)} frames grouped into {len(sizes)} scenes** (sizes {sizes}) in {time.time() - started:.1f}s"
@@ -152,8 +174,10 @@ def run_bag(model, files, resolution, threshold, linkage, max_images):
 
 
 def build_ui(model: VGGTOmega, args) -> gr.Blocks:
-    def group(files, resolution, threshold, linkage):
-        return run_bag(model, files, resolution, threshold, linkage, args.max_images)
+    def group(files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold):
+        return run_bag(
+            model, files, resolution, threshold, linkage, args.max_images, method, baseline_layer, baseline_threshold
+        )
 
     with gr.Blocks(title="Multi-scene VGGT-Omega") as demo:
         gr.Markdown(
@@ -161,15 +185,26 @@ def build_ui(model: VGGTOmega, args) -> gr.Blocks:
             f"The model groups them into scenes. Device: `{next(model.parameters()).device}`."
         )
         files = gr.File(file_count="multiple", file_types=IMAGE_TYPES, label="Images (2 or more)")
+        methods = [LEARNED, BASELINE] if model.multiscene is not None else [BASELINE]
+        method = gr.Radio(methods, value=methods[0], label="Method")
         with gr.Row():
             resolution = gr.Slider(224, 640, value=args.image_resolution, step=16, label="Image resolution")
-            threshold = gr.Slider(0.1, 0.9, value=args.threshold, step=0.05, label="Same-scene threshold")
+            threshold = gr.Slider(0.1, 0.9, value=args.threshold, step=0.05, label="Same-scene threshold (learned heads)")
             linkage = gr.Dropdown(["average", "single", "complete"], value=args.linkage, label="Linkage")
+        with gr.Row():
+            baseline_layer = gr.Slider(1, 24, value=args.baseline_layer, step=1, label="Baseline: backbone block")
+            baseline_threshold = gr.Slider(
+                0.5, 1.0, value=args.baseline_threshold, step=0.005, label="Baseline: cosine threshold"
+            )
         button = gr.Button("Group", variant="primary")
         summary = gr.Markdown()
         scenes = gr.HTML()
         heatmap = gr.Image(label="Affinity, frames sorted by predicted scene")
-        button.click(group, [files, resolution, threshold, linkage], [summary, scenes, heatmap])
+        button.click(
+            group,
+            [files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold],
+            [summary, scenes, heatmap],
+        )
     return demo
 
 
@@ -181,6 +216,8 @@ def main() -> None:
     parser.add_argument("--route-layer", type=int, default=11, help="must match model.multiscene.route_layer in training")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--linkage", default="average", choices=["average", "single", "complete"])
+    parser.add_argument("--baseline-layer", type=int, default=4, help="backbone block of the patch-cosine baseline")
+    parser.add_argument("--baseline-threshold", type=float, default=0.9, help="fitted on retail, tune it for other data")
     parser.add_argument("--max-images", type=int, default=24)
     parser.add_argument("--port", type=int, help="default: the first free port from 7860")
     args = parser.parse_args()

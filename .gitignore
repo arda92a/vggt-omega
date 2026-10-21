@@ -25,3 +25,7 @@ Multi_Scene_VGGT_Omega/
 vggt-omega-paper/
 logs/
 wandb/
+
+Stitch_Requests/
+RETAIL_DIR/
+bags_eval/

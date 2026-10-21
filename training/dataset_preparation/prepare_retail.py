@@ -16,7 +16,7 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 
-FRAME = re.compile(r"^(?P<seq>.+)_(?P<index>\d+)\.(?:jpg|jpeg|png)$", re.IGNORECASE)
+FRAME = re.compile(r"^(?P<seq>.+)[_-](?P<index>\d+)\.(?:jpg|jpeg|png)$", re.IGNORECASE)
 
 
 def group_frames(image_dir: Path) -> dict[str, list[str]]:
