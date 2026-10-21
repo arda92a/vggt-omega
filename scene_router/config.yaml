@@ -8,8 +8,7 @@ width: 336             # most Stitch_Requests frames are portrait 1500x2000 (3:4
 workers: 4
 
 # model
-arch: vits16           # vits16 | vitb16 | vitl16
-weights: ~/Downloads/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+backbone: facebook/dinov3-vits16-pretrain-lvd1689m   # Hugging Face id, e.g. facebook/dinov3-vitb16-pretrain-lvd1689m
 train_blocks: 2        # last DINOv3 blocks to fine-tune, 0 keeps the backbone frozen
 dim: 256               # width of the router head
 context_layers: 2      # transformer layers over the frames of a bag, 0 compares frames on their own

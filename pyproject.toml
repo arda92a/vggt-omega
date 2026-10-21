@@ -63,6 +63,7 @@ train = [
     "tensorboard",
     "wcmatch",
     "wandb",
+    "transformers>=4.56",
 ]
 dev = ["pytest"]
 
