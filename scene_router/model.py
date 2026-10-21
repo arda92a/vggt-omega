@@ -1,6 +1,6 @@
 """Scene router: DINOv3 features per frame, a small transformer over the frames of a bag, a pairwise affinity matrix.
 
-    frame -> DINOv3 (CLS + mean patch) -> MLP -> bag transformer (frames see each other) -> embedding e_i
+    frame -> DINOv3 (CLS + pooled patches) -> MLP -> bag transformer (frames see each other) -> embedding e_i
     affinity logit(i, j) = scale * cos(e_i, e_j) + bias        sigmoid of it: P(i and j are the same sequence)
 
 The DINOv3 weights are the official .pth files, read from weights_dir by arch, for example
@@ -70,11 +70,48 @@ def set_trainable(backbone: DinoVisionTransformer, train_blocks: int) -> None:
         backbone.norm.requires_grad_(True)
 
 
+POOLINGS = ("mean", "max", "gem", "attention")
+
+
+class PatchPool(nn.Module):
+    """Patch tokens (M, P, C) -> one vector (M, C) per frame.
+
+    mean       average of all patches: the overall look of the frame
+    max        strongest response per channel: keeps small distinctive details (a product, a label)
+    gem        generalized mean, between mean (p=1) and max (p -> inf); p is learned, starts at 3
+    attention  a learned query attends over the patches, so training decides which patches matter
+    """
+
+    def __init__(self, mode: str, width: int, heads: int):
+        super().__init__()
+        if mode not in POOLINGS:
+            raise ValueError(f"pooling must be one of {POOLINGS}, got {mode!r}")
+        self.mode = mode
+        if mode == "gem":
+            self.p = nn.Parameter(torch.tensor(3.0))
+        if mode == "attention":
+            self.query = nn.Parameter(torch.randn(1, 1, width) * 0.02)
+            self.attention = nn.MultiheadAttention(width, heads, batch_first=True)
+
+    def forward(self, patches: torch.Tensor) -> torch.Tensor:
+        if self.mode == "mean":
+            return patches.mean(1)
+        if self.mode == "max":
+            return patches.max(1).values
+        if self.mode == "gem":
+            p = self.p.clamp(min=1.0)
+            return patches.clamp(min=1e-6).pow(p).mean(1).pow(1.0 / p)  # negatives clamped, GeM needs x >= 0
+        query = self.query.expand(len(patches), -1, -1)
+        return self.attention(query, patches, patches, need_weights=False)[0][:, 0]
+
+
 class SceneRouter(nn.Module):
-    def __init__(self, backbone: DinoVisionTransformer, dim: int = 256, context_layers: int = 2, heads: int = 8):
+    def __init__(self, backbone: DinoVisionTransformer, dim: int = 256, context_layers: int = 2, heads: int = 8,
+                 pooling: str = "mean"):
         super().__init__()
         self.backbone = backbone
         width = backbone.embed_dim
+        self.pool = PatchPool(pooling, width, backbone.num_heads)
         self.register_buffer("mean", torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(IMAGENET_STD).view(1, 3, 1, 1), persistent=False)
 
@@ -88,10 +125,11 @@ class SceneRouter(nn.Module):
         self.bias = nn.Parameter(torch.tensor(-5.0))
 
     def frame_features(self, images: torch.Tensor) -> torch.Tensor:
-        """uint8 images (M, 3, H, W) -> (M, 2 * width): CLS token and mean patch token."""
+        """uint8 images (M, 3, H, W) -> (M, 2 * width): CLS token and pooled patch tokens."""
         x = (images.float() / 255 - self.mean) / self.std
         out = self.backbone.forward_features(x)
-        return torch.cat([out["x_norm_clstoken"], out["x_norm_patchtokens"].mean(1)], dim=-1).float()
+        patches = out["x_norm_patchtokens"].float()
+        return torch.cat([out["x_norm_clstoken"].float(), self.pool(patches)], dim=-1)
 
     def forward(self, images: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """images (B, N, 3, H, W) with mask (B, N) of real frames -> affinity logits (B, N, N)."""
@@ -108,4 +146,4 @@ class SceneRouter(nn.Module):
 def build_router(cfg: dict) -> SceneRouter:
     backbone = build_dinov3(cfg["arch"], cfg["weights_dir"])
     set_trainable(backbone, cfg["train_blocks"])
-    return SceneRouter(backbone, dim=cfg["dim"], context_layers=cfg["context_layers"])
+    return SceneRouter(backbone, dim=cfg["dim"], context_layers=cfg["context_layers"], pooling=cfg["pooling"])

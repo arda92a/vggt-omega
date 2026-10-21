@@ -11,6 +11,7 @@ workers: 4
 arch: vits16           # vits16 | vitb16 | vitl16
 weights_dir: dino_models   # holds dinov3_<arch>_pretrain_*.pth, e.g. dinov3_vits16_pretrain_lvd1689m-08c60483.pth
 train_blocks: 2        # last DINOv3 blocks to fine-tune, 0 keeps the backbone frozen
+pooling: max          # patch tokens -> one vector per frame: mean | max | gem | attention (CLS is always added)
 dim: 256               # width of the router head
 context_layers: 2      # transformer layers over the frames of a bag, 0 compares frames on their own
 
@@ -29,7 +30,7 @@ device: auto           # auto | cuda | mps | cpu
 amp: true              # bf16 autocast on cuda
 
 # output
-out: outputs/scene_router/dinov3_vits16
-wandb: false
-wandb_project: scene-router
-wandb_name: null
+out: outputs/scene_router/dinov3_vits16_max_pooling
+wandb: true
+wandb_project: vggt-omega-multiscene
+wandb_name: dinov3_vits_max_pooling
