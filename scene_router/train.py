@@ -155,7 +155,7 @@ def main() -> None:
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    log.info(f"device {device}  |  {cfg['backbone']}, last {cfg['train_blocks']} blocks trained  |  "
+    log.info(f"device {device}  |  DINOv3 {cfg['arch']}, last {cfg['train_blocks']} blocks trained  |  "
              f"trainable {trainable / 1e6:.1f}M of {total / 1e6:.1f}M parameters")
     log.info(f"train {len(train_loader.dataset)} bags ({len(train_loader.sampler)} per epoch, "
              f"{len(train_loader)} steps)  |  val {len(val_loader.dataset)} bags  |  output {out}")

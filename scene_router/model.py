@@ -3,41 +3,78 @@
     frame -> DINOv3 (CLS + mean patch) -> MLP -> bag transformer (frames see each other) -> embedding e_i
     affinity logit(i, j) = scale * cos(e_i, e_j) + bias        sigmoid of it: P(i and j are the same sequence)
 
-The backbone comes from the Hugging Face Hub, for example facebook/dinov3-vits16-pretrain-lvd1689m (any DINOv3 ViT
-works, also vitb16, vitl16, vits16plus, vith16plus). These repos are gated: request access on the model page once,
-then log in on the machine with `hf auth login` or set HF_TOKEN.
+The DINOv3 weights are the official .pth files, read from weights_dir by arch, for example
+dino_models/dinov3_vits16_pretrain_lvd1689m-08c60483.pth for arch vits16.
 """
+
+import logging
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModel
+
+from vggt_omega.models.layers.vision_transformer import DinoVisionTransformer
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
+# Official DINOv3 LVD-1689M backbones (dinov3/hub/backbones.py). The "plus" sizes use SwiGLU and are not listed.
+ARCHS = {
+    "vits16": dict(embed_dim=384, depth=12, num_heads=6),
+    "vitb16": dict(embed_dim=768, depth=12, num_heads=12),
+    "vitl16": dict(embed_dim=1024, depth=24, num_heads=16),
+}
+COMMON = dict(
+    img_size=224, patch_size=16, pos_embed_rope_base=100, pos_embed_rope_normalize_coords="separate",
+    pos_embed_rope_dtype="fp32", ffn_ratio=4, qkv_bias=True, drop_path_rate=0.0, layerscale_init=1.0e-5,
+    norm_layer="layernormbf16", ffn_layer="mlp", ffn_bias=True, proj_bias=True, n_storage_tokens=4, mask_k_bias=True,
+    # The official models set pos_embed_rope_rescale_coords=2, a train-time augmentation of positions only.
+    # It is left off so fine-tuning sees the same positions as inference.
+)
 
-def load_backbone(name: str) -> nn.Module:
-    # DINOv3 jitters patch positions in train mode (pos_embed_rescale=2), an augmentation of its own pretraining.
-    # It is turned off so fine-tuning sees the same positions as inference.
-    return AutoModel.from_pretrained(name, pos_embed_rescale=None)
+
+def find_weights(weights_dir: str, arch: str) -> Path:
+    """The one dinov3_<arch>_pretrain*.pth file in weights_dir."""
+    folder = Path(weights_dir).expanduser()
+    if not folder.is_dir():
+        raise FileNotFoundError(f"weights_dir {folder} does not exist")
+    found = sorted(folder.glob(f"dinov3_{arch}_pretrain*.pth"))
+    if not found:
+        present = ", ".join(p.name for p in folder.glob("*.pth")) or "no .pth files"
+        raise FileNotFoundError(f"no DINOv3 {arch} weights (dinov3_{arch}_pretrain*.pth) in {folder}, found: {present}")
+    if len(found) > 1:
+        raise FileNotFoundError(f"several DINOv3 {arch} weights in {folder}: {', '.join(p.name for p in found)}")
+    return found[0]
 
 
-def set_trainable(backbone: nn.Module, train_blocks: int) -> None:
+def build_dinov3(arch: str, weights_dir: str) -> DinoVisionTransformer:
+    if arch not in ARCHS:
+        raise ValueError(f"arch must be one of {list(ARCHS)}, got {arch!r}")
+    path = find_weights(weights_dir, arch)
+    logging.getLogger("dinov3").setLevel(logging.WARNING)  # quiet the per-build RoPE messages
+    model = DinoVisionTransformer(**COMMON, **ARCHS[arch])
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    state = {k: v for k, v in state.items() if "local_cls_norm" not in k}  # unused head of some checkpoints
+    model.load_state_dict(state, strict=True)
+    logging.getLogger("scene_router").info(f"DINOv3 {arch} weights: {path}")
+    return model
+
+
+def set_trainable(backbone: DinoVisionTransformer, train_blocks: int) -> None:
     """Freeze the backbone except its last `train_blocks` blocks and final norm (0 freezes all of it)."""
     backbone.requires_grad_(False)
     if train_blocks > 0:
-        for block in backbone.model.layer[-train_blocks:]:
+        for block in backbone.blocks[-train_blocks:]:
             block.requires_grad_(True)
         backbone.norm.requires_grad_(True)
 
 
 class SceneRouter(nn.Module):
-    def __init__(self, backbone: nn.Module, dim: int = 256, context_layers: int = 2, heads: int = 8):
+    def __init__(self, backbone: DinoVisionTransformer, dim: int = 256, context_layers: int = 2, heads: int = 8):
         super().__init__()
         self.backbone = backbone
-        self.first_patch = 1 + backbone.config.num_register_tokens  # tokens are [CLS, registers, patches]
-        width = backbone.config.hidden_size
+        width = backbone.embed_dim
         self.register_buffer("mean", torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(IMAGENET_STD).view(1, 3, 1, 1), persistent=False)
 
@@ -53,8 +90,8 @@ class SceneRouter(nn.Module):
     def frame_features(self, images: torch.Tensor) -> torch.Tensor:
         """uint8 images (M, 3, H, W) -> (M, 2 * width): CLS token and mean patch token."""
         x = (images.float() / 255 - self.mean) / self.std
-        tokens = self.backbone(pixel_values=x).last_hidden_state  # already layer-normed
-        return torch.cat([tokens[:, 0], tokens[:, self.first_patch:].mean(1)], dim=-1).float()
+        out = self.backbone.forward_features(x)
+        return torch.cat([out["x_norm_clstoken"], out["x_norm_patchtokens"].mean(1)], dim=-1).float()
 
     def forward(self, images: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """images (B, N, 3, H, W) with mask (B, N) of real frames -> affinity logits (B, N, N)."""
@@ -69,6 +106,6 @@ class SceneRouter(nn.Module):
 
 
 def build_router(cfg: dict) -> SceneRouter:
-    backbone = load_backbone(cfg["backbone"])
+    backbone = build_dinov3(cfg["arch"], cfg["weights_dir"])
     set_trainable(backbone, cfg["train_blocks"])
     return SceneRouter(backbone, dim=cfg["dim"], context_layers=cfg["context_layers"])
