@@ -1,10 +1,13 @@
 # Scene router training. Any key can be overridden on the command line: key=value
 # uv run python -m scene_router.train --config scene_router/config.yaml epochs=5 wandb=true
 
+model: dino_router     # dino_router | vggt_match (see config_vggt_match.yaml)
+
 # data (made by scene_router/make_bags.py)
 data_dir: scene_router/data
 height: 448            # every frame is resized whole to height x width, no crop
 width: 336             # most Stitch_Requests frames are portrait 1500x2000 (3:4)
+resize: stretch        # stretch: whole frame, no crop | crop: centre crop to height:width
 workers: 4
 
 # model

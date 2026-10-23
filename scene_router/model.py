@@ -48,12 +48,16 @@ def find_weights(weights_dir: str, arch: str) -> Path:
     return found[0]
 
 
-def build_dinov3(arch: str, weights_dir: str) -> DinoVisionTransformer:
+def build_dinov3(arch: str, weights_dir: str | None) -> DinoVisionTransformer:
+    """DINOv3 of the given size. weights_dir None leaves it untrained, for loading a router checkpoint into it."""
     if arch not in ARCHS:
         raise ValueError(f"arch must be one of {list(ARCHS)}, got {arch!r}")
-    path = find_weights(weights_dir, arch)
     logging.getLogger("dinov3").setLevel(logging.WARNING)  # quiet the per-build RoPE messages
     model = DinoVisionTransformer(**COMMON, **ARCHS[arch])
+    if weights_dir is None:
+        model.init_weights()
+        return model
+    path = find_weights(weights_dir, arch)
     state = torch.load(path, map_location="cpu", weights_only=True)
     state = {k: v for k, v in state.items() if "local_cls_norm" not in k}  # unused head of some checkpoints
     model.load_state_dict(state, strict=True)
@@ -124,6 +128,10 @@ class SceneRouter(nn.Module):
         self.scale = nn.Parameter(torch.tensor(10.0))
         self.bias = nn.Parameter(torch.tensor(-5.0))
 
+    def describe(self) -> str:
+        trained = sum(any(p.requires_grad for p in block.parameters()) for block in self.backbone.blocks)
+        return f"DINOv3 {self.backbone.embed_dim}-wide, last {trained} blocks trained, {self.pool.mode} pooling"
+
     def frame_features(self, images: torch.Tensor) -> torch.Tensor:
         """uint8 images (M, 3, H, W) -> (M, 2 * width): CLS token and pooled patch tokens."""
         x = (images.float() / 255 - self.mean) / self.std
@@ -143,7 +151,43 @@ class SceneRouter(nn.Module):
         return self.scale * embeddings @ embeddings.transpose(1, 2) + self.bias
 
 
-def build_router(cfg: dict) -> SceneRouter:
-    backbone = build_dinov3(cfg["arch"], cfg["weights_dir"])
+def build_router(cfg: dict, pretrained: bool = True) -> SceneRouter:
+    backbone = build_dinov3(cfg["arch"], cfg["weights_dir"] if pretrained else None)
     set_trainable(backbone, cfg["train_blocks"])
     return SceneRouter(backbone, dim=cfg["dim"], context_layers=cfg["context_layers"], pooling=cfg["pooling"])
+
+
+MODELS = ("dino_router", "vggt_match")
+
+
+def build_model(cfg: dict, pretrained: bool = True) -> nn.Module:
+    """model: dino_router (DINOv3 + pooling + bag transformer) or vggt_match (frozen VGGT-Omega + patch matching)."""
+    kind = cfg.get("model", "dino_router")
+    if kind == "dino_router":
+        return build_router(cfg, pretrained)
+    if kind == "vggt_match":
+        from scene_router.vggt_match import build_matcher
+
+        return build_matcher(cfg)
+    raise ValueError(f"model must be one of {MODELS}, got {kind!r}")
+
+
+def load_router(checkpoint: str, device: torch.device, vggt_weights: str | None = None) -> tuple[nn.Module, dict]:
+    """A trained model from a train.py checkpoint (best.pt / last.pt) and its config.
+
+    dino_router checkpoints hold every weight, no DINOv3 file needed. vggt_match checkpoints hold only the learned
+    head: the frozen VGGT-Omega part is read from vggt_weights (default: the path used in training).
+    """
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    cfg = dict(saved["config"])
+    if cfg.get("model", "dino_router") == "vggt_match":
+        if vggt_weights:
+            cfg["vggt_weights"] = vggt_weights
+        model = build_model(cfg)
+        missing, unexpected = model.load_state_dict(saved["model"], strict=False)
+        if unexpected or any(not key.startswith("aggregator.") for key in missing):
+            raise SystemExit(f"{checkpoint} does not fit the vggt_match model: {unexpected or missing}")
+    else:
+        model = build_router(cfg, pretrained=False)
+        model.load_state_dict(saved["model"])
+    return model.to(device).eval(), cfg

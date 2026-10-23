@@ -10,20 +10,35 @@ from torch.utils.data import Dataset
 from torchvision.transforms import v2
 
 
-def load_frame(path: Path, height: int, width: int) -> torch.Tensor:
-    """The whole frame resized to (height, width), no crop: uint8 tensor (3, H, W)."""
+def load_frame(path: Path, height: int, width: int, resize: str = "stretch") -> torch.Tensor:
+    """A frame as a uint8 tensor (3, H, W).
+
+    stretch  the whole frame resized to (height, width), no crop (the DINOv3 router)
+    crop     centre crop to the height:width aspect, then resize, as in training/evaluate.py (the VGGT patch matcher)
+    """
     with Image.open(path) as image:
         image.draft("RGB", (width, height))  # JPEG decodes at a smaller scale directly, much faster for big photos
-        image = image.convert("RGB").resize((width, height), Image.Resampling.BICUBIC)
+        image = image.convert("RGB")
+        if resize == "crop":
+            w, h = image.size
+            if w / h > width / height:
+                new_w = int(round(h * width / height))
+                image = image.crop(((w - new_w) // 2, 0, (w - new_w) // 2 + new_w, h))
+            else:
+                new_h = int(round(w * height / width))
+                image = image.crop((0, (h - new_h) // 2, w, (h - new_h) // 2 + new_h))
+        elif resize != "stretch":
+            raise ValueError(f"resize must be stretch or crop, got {resize!r}")
+        image = image.resize((width, height), Image.Resampling.BICUBIC)
     return torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)
 
 
 class BagDataset(Dataset):
-    def __init__(self, bags_file: str | Path, height: int, width: int, augment: bool = False):
+    def __init__(self, bags_file: str | Path, height: int, width: int, augment: bool = False, resize: str = "stretch"):
         content = json.loads(Path(bags_file).read_text())
         self.root = Path(content["root"])
         self.bags = content["bags"]
-        self.height, self.width = height, width
+        self.height, self.width, self.resize = height, width, resize
         # Mild colour changes only: geometry stays as it is, so overlaps between neighbouring frames stay real.
         self.augment = v2.ColorJitter(0.2, 0.2, 0.2, 0.02) if augment else None
 
@@ -32,7 +47,7 @@ class BagDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict:
         bag = self.bags[index]
-        frames = [load_frame(self.root / f, self.height, self.width) for f in bag["frames"]]
+        frames = [load_frame(self.root / f, self.height, self.width, self.resize) for f in bag["frames"]]
         if self.augment is not None:
             frames = [self.augment(frame) for frame in frames]
         return {

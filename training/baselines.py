@@ -20,6 +20,12 @@ model. Methods, at every layer in --layers (1-based):
   global/reg      same with the register tokens
   cat/patch       mean patch token of the frame and global tokens joined, 2048 wide, as the heads read them
   attn            attention mass the frames of the bag give each other in the global-attention block
+  */match-mean    patch matching, no pooling: every patch of frame A is compared with every patch of frame B
+                  (cosine), each patch keeps its best match, and the score is the mean of those best matches
+                  over the patches of A and of B. For dino, dinov3, frame and global patches.
+  */matchNN       the same, but the score is the share of patches whose best match is at least 0.NN, for example
+                  frame/match70@4: the share of patches of the two frames that find a match of cosine >= 0.70
+  */match*-c      the same after subtracting the mean patch of the bag, which removes what every patch shares
   learned/*       the trained route and final heads, with --checkpoint
 
 Nothing is trained and all scenes form one pool. Per method one threshold is chosen, the one with the best mean
@@ -59,6 +65,12 @@ VARIANTS = [f"{prefix}/{kind}{suffix}" for prefix in ("dino", "dinov3") for suff
     "frame/patch", "frame/max", "frame/gem", "frame/reg", "global/patch", "global/max", "global/gem", "global/reg",
     "cat/patch", "attn", "attn-clean", "attn-peak", "attn-logit"
 ]
+# Patch thresholds of the matchNN methods, around where best matches fall on bags_eval: raw cosines have a median
+# of about 0.80 for same-scene frame pairs and 0.62 for different scenes, centered ones 0.67 and 0.42.
+MATCH_THRESHOLDS = {"": (0.6, 0.7, 0.75, 0.8, 0.9), "-c": (0.4, 0.5, 0.6, 0.7, 0.8)}
+VARIANTS += [f"{prefix}/match{kind}{suffix}" for prefix in ("dino", "dinov3", "frame", "global")
+             for suffix in MATCH_THRESHOLDS
+             for kind in ["-mean"] + [f"{round(100 * t)}" for t in MATCH_THRESHOLDS[suffix]]]
 GEM_P = 3.0
 IMAGENET_MEAN, IMAGENET_STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 LEARNED = ["learned/route", "learned/final"]
@@ -203,6 +215,42 @@ def dino_affinities(features: dict, name: str) -> dict:
     return {f"{name}/{kind}": cosine(vectors) for kind, vectors in features.items()}
 
 
+def best_matches(patches: torch.Tensor) -> torch.Tensor:
+    """patches (N, P, C), unit length -> best (N, N, P): best[i, j, p] = max over q of cos(patch p of i, patch q of j)."""
+    best = torch.empty(patches.shape[0], patches.shape[0], patches.shape[1], device=patches.device)
+    for i, frame in enumerate(patches):
+        best[i] = torch.einsum("pc,jqc->jpq", frame, patches).amax(-1)
+    return best
+
+
+@torch.no_grad()
+def match_affinities(patches: torch.Tensor, name: str) -> dict:
+    """Patch-matching affinities of one set of frames from all their patch tokens (N, P, C), raw and centered."""
+    affinities = {}
+    for suffix, thresholds in MATCH_THRESHOLDS.items():
+        x = patches.float()
+        if suffix == "-c":
+            x = x - x.mean((0, 1), keepdim=True)  # mean patch of the whole bag, no labels involved
+        best = best_matches(F.normalize(x, dim=-1))
+
+        def symmetric(scores: torch.Tensor) -> torch.Tensor:  # (N, N): mean of the A->B and B->A scores
+            return (0.5 * (scores + scores.T)).cpu()
+
+        affinities[f"{name}/match-mean{suffix}"] = symmetric(best.mean(-1))
+        for threshold in thresholds:
+            affinities[f"{name}/match{round(100 * threshold)}{suffix}"] = symmetric((best >= threshold).float().mean(-1))
+    return affinities
+
+
+@torch.no_grad()
+def dino_patches(backbone, images: torch.Tensor, context) -> torch.Tensor:
+    """Patch tokens (N, P, C) of a DINOv3 backbone that sees each frame alone."""
+    mean = torch.tensor(IMAGENET_MEAN, device=images.device).view(1, 3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, device=images.device).view(1, 3, 1, 1)
+    with context:
+        return backbone((images - mean) / std)["x_norm_patchtokens"].float()
+
+
 def centered_affinities(items: list[dict], name: str) -> list[dict]:
     """Subtract each descriptor's mean over every frame of every item, then take the cosine."""
     means = {kind: torch.cat([item[kind] for item in items]).mean(0) for kind in items[0]}
@@ -210,8 +258,11 @@ def centered_affinities(items: list[dict], name: str) -> list[dict]:
 
 
 @torch.no_grad()
-def backbone_affinities(model, images: torch.Tensor, layers: list[int], context, attention: bool = True) -> dict:
-    """Affinity matrices of every backbone method at the given 1-based blocks. attention=False skips the costly attn."""
+def backbone_affinities(
+    model, images: torch.Tensor, layers: list[int], context, attention: bool = True, match: bool = False
+) -> dict:
+    """Affinity matrices of every backbone method at the given 1-based blocks. attention=False skips the costly attn,
+    match=True adds the patch-matching methods (frame/match*, global/match*)."""
     aggregator = model.aggregator
     num_frames, _, height, width = images.shape
     affinities = {}
@@ -244,6 +295,9 @@ def backbone_affinities(model, images: torch.Tensor, layers: list[int], context,
                     for kind, vectors in pool_patches(seen[:, start:].float()).items():
                         affinities[f"{stream}/{kind}@{layer}"] = cosine(vectors)
                     affinities[f"{stream}/reg@{layer}"] = cosine(seen[:, 1:start].float().mean(1))
+                    if match:
+                        for method, matrix in match_affinities(seen[:, start:], stream).items():
+                            affinities[f"{method}@{layer}"] = matrix
                 # The heads read frame and global tokens side by side, 2 x 1024 wide.
                 joined = torch.cat([frame_tokens[0], after], dim=-1).float()
                 affinities[f"cat/patch@{layer}"] = cosine(joined[:, start:].mean(1))
@@ -276,10 +330,10 @@ def auroc(scores: torch.Tensor, same: torch.Tensor) -> float:
     return float((ranks[same].sum() - positive * (positive + 1) / 2) / (positive * negative))
 
 
-def mean_ari(affinities: list, labels: list, threshold: float) -> tuple[float, float]:
+def mean_ari(affinities: list, labels: list, threshold: float, linkage: str = "average") -> tuple[float, float]:
     aris, exact = [], []
     for affinity, label in zip(affinities, labels):
-        groups = scene_groups(affinity[None], threshold)[0]
+        groups = scene_groups(affinity[None], threshold, linkage)[0]
         aris.append(adjusted_rand_index(groups, label))
         same = groups[:, None] == groups[None, :]
         exact.append(float((same == (label[:, None] == label[None, :])).all()))
@@ -291,14 +345,14 @@ def threshold_grid(affinities: list, labels: list, points: int = 12) -> list[flo
     return torch.quantile(scores, torch.linspace(0.2, 0.95, points)).tolist()
 
 
-def fit_threshold(affinities: list, labels: list) -> float:
+def fit_threshold(affinities: list, labels: list, linkage: str = "average") -> float:
     grid = threshold_grid(affinities, labels)
-    return max(grid, key=lambda threshold: mean_ari(affinities, labels, threshold)[0])
+    return max(grid, key=lambda threshold: mean_ari(affinities, labels, threshold, linkage)[0])
 
 
-def largest_group_share(affinity: torch.Tensor, threshold: float) -> float:
+def largest_group_share(affinity: torch.Tensor, threshold: float, linkage: str = "average") -> float:
     """Cluster completeness of one scene given alone: the share of its frames that stay in one group."""
-    groups = scene_groups(affinity[None], threshold)[0]
+    groups = scene_groups(affinity[None], threshold, linkage)[0]
     return float(torch.bincount(groups).max()) / len(groups)
 
 
@@ -389,12 +443,28 @@ def load_plain(weights: str, device: torch.device) -> VGGTOmega:
 
 
 def load_dinov3(path: str, device: torch.device):
-    """The official bare DINOv3 ViT-L/16 state dict, loaded the way checkpoint.dinov3_weight_path is."""
+    """An official bare DINOv3 ViT/16 state dict. The size (S, B or L) is read from the weights.
+
+    ViT-L is built the way checkpoint.dinov3_weight_path is (as before). ViT-S and ViT-B use the settings of the
+    official dinov3/hub/backbones.py.
+    """
     from vggt_omega.models.aggregator import _build_patch_embed
+    from vggt_omega.models.layers.vision_transformer import DinoVisionTransformer
 
     state = torch.load(path, map_location="cpu", weights_only=False)
     state = {key: value for key, value in state.items() if "local_cls_norm" not in key}
-    model = _build_patch_embed(patch_size=16, embed_dim=1024)
+    width = state["cls_token"].shape[-1]
+    if width == 1024:
+        model = _build_patch_embed(patch_size=16, embed_dim=1024)
+    elif width in (384, 768):
+        model = DinoVisionTransformer(
+            img_size=224, patch_size=16, pos_embed_rope_base=100, pos_embed_rope_normalize_coords="separate",
+            pos_embed_rope_dtype="fp32", embed_dim=width, depth=12, num_heads=width // 64, ffn_ratio=4,
+            qkv_bias=True, layerscale_init=1.0e-5, norm_layer="layernormbf16", ffn_layer="mlp", ffn_bias=True,
+            proj_bias=True, n_storage_tokens=4, mask_k_bias=True,
+        )
+    else:
+        raise SystemExit(f"{path}: width {width} is not a DINOv3 ViT-S/16, ViT-B/16 or ViT-L/16")
     model.load_state_dict(state, strict=True)
     return model.to(device).eval()
 

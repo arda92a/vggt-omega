@@ -1,0 +1,436 @@
+{
+  "cat/patch@12": {
+    "auroc": 0.9069265127182007,
+    "ari": 0.7137362756276122,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.741028971028971,
+    "threshold": 0.9314860701560974
+  },
+  "cat/patch@2": {
+    "auroc": 0.9724581837654114,
+    "ari": 0.8214216133969608,
+    "perfect_bag_ratio": 0.4931506849315068,
+    "cluster_completeness": 0.9385008660590056,
+    "threshold": 0.9252709150314331
+  },
+  "cat/patch@3": {
+    "auroc": 0.9728390574455261,
+    "ari": 0.8241595862649642,
+    "perfect_bag_ratio": 0.4657534246575342,
+    "cluster_completeness": 0.9377290280778652,
+    "threshold": 0.9122889637947083
+  },
+  "cat/patch@4": {
+    "auroc": 0.9729858636856079,
+    "ari": 0.8281005343376193,
+    "perfect_bag_ratio": 0.4794520547945205,
+    "cluster_completeness": 0.9407378538773887,
+    "threshold": 0.907364547252655
+  },
+  "cat/patch@6": {
+    "auroc": 0.9727949500083923,
+    "ari": 0.8254067835268528,
+    "perfect_bag_ratio": 0.4931506849315068,
+    "cluster_completeness": 0.9430616799221451,
+    "threshold": 0.904493510723114
+  },
+  "cat/patch@8": {
+    "auroc": 0.9721695780754089,
+    "ari": 0.8106130546784288,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9724418604651163,
+    "threshold": 0.8743635416030884
+  },
+  "dino/cls": {
+    "auroc": 0.9699231386184692,
+    "ari": 0.8196653581692575,
+    "perfect_bag_ratio": 0.5068493150684932,
+    "cluster_completeness": 0.9353124911264448,
+    "threshold": 0.9053857922554016
+  },
+  "dino/cls-c": {
+    "auroc": 0.9765119552612305,
+    "ari": 0.8191968133036706,
+    "perfect_bag_ratio": 0.410958904109589,
+    "cluster_completeness": 0.9333259505352528,
+    "threshold": 0.5442418456077576
+  },
+  "dino/gem": {
+    "auroc": 0.9760679006576538,
+    "ari": 0.8509016673177341,
+    "perfect_bag_ratio": 0.5616438356164384,
+    "cluster_completeness": 0.9409870233126048,
+    "threshold": 0.9793258905410767
+  },
+  "dino/gem-c": {
+    "auroc": 0.9831499457359314,
+    "ari": 0.8672584349724243,
+    "perfect_bag_ratio": 0.6575342465753424,
+    "cluster_completeness": 0.9849753347427765,
+    "threshold": 0.35086408257484436
+  },
+  "dino/max": {
+    "auroc": 0.9766553044319153,
+    "ari": 0.8712996264210193,
+    "perfect_bag_ratio": 0.547945205479452,
+    "cluster_completeness": 0.9461445918422664,
+    "threshold": 0.9769632816314697
+  },
+  "dino/max-c": {
+    "auroc": 0.9878990054130554,
+    "ari": 0.8947564459268811,
+    "perfect_bag_ratio": 0.547945205479452,
+    "cluster_completeness": 0.9569096278398606,
+    "threshold": 0.37934377789497375
+  },
+  "dino/patch": {
+    "auroc": 0.9727745056152344,
+    "ari": 0.8291588247523822,
+    "perfect_bag_ratio": 0.5205479452054794,
+    "cluster_completeness": 0.9384639520686032,
+    "threshold": 0.9434930086135864
+  },
+  "dino/patch-c": {
+    "auroc": 0.9782378077507019,
+    "ari": 0.8546054994108478,
+    "perfect_bag_ratio": 0.4794520547945205,
+    "cluster_completeness": 0.9417460317460318,
+    "threshold": 0.5222353339195251
+  },
+  "frame/gem@12": {
+    "auroc": 0.9611314535140991,
+    "ari": 0.8022520977781206,
+    "perfect_bag_ratio": 0.4794520547945205,
+    "cluster_completeness": 0.8736065743042488,
+    "threshold": 0.9733622074127197
+  },
+  "frame/gem@2": {
+    "auroc": 0.9761559367179871,
+    "ari": 0.8448140279975476,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9392815969560155,
+    "threshold": 0.9744679927825928
+  },
+  "frame/gem@3": {
+    "auroc": 0.9768555164337158,
+    "ari": 0.8314067006635633,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.943960445239515,
+    "threshold": 0.9731735587120056
+  },
+  "frame/gem@4": {
+    "auroc": 0.9771968722343445,
+    "ari": 0.834538780696158,
+    "perfect_bag_ratio": 0.6164383561643836,
+    "cluster_completeness": 0.9807505285412262,
+    "threshold": 0.9673281908035278
+  },
+  "frame/gem@6": {
+    "auroc": 0.9758228659629822,
+    "ari": 0.8255466290742629,
+    "perfect_bag_ratio": 0.589041095890411,
+    "cluster_completeness": 0.9789675828047922,
+    "threshold": 0.9668958783149719
+  },
+  "frame/gem@8": {
+    "auroc": 0.9749740958213806,
+    "ari": 0.8204102339644522,
+    "perfect_bag_ratio": 0.5616438356164384,
+    "cluster_completeness": 0.9718357998590557,
+    "threshold": 0.9677608013153076
+  },
+  "frame/max@12": {
+    "auroc": 0.9485493302345276,
+    "ari": 0.797222904691036,
+    "perfect_bag_ratio": 0.1095890410958904,
+    "cluster_completeness": 0.75571486652882,
+    "threshold": 0.9757741093635559
+  },
+  "frame/max@2": {
+    "auroc": 0.9772282242774963,
+    "ari": 0.873818117282568,
+    "perfect_bag_ratio": 0.547945205479452,
+    "cluster_completeness": 0.9437525652641932,
+    "threshold": 0.9747003316879272
+  },
+  "frame/max@3": {
+    "auroc": 0.9781368970870972,
+    "ari": 0.8593418227955053,
+    "perfect_bag_ratio": 0.6575342465753424,
+    "cluster_completeness": 0.9772443706164636,
+    "threshold": 0.9698789715766907
+  },
+  "frame/max@4": {
+    "auroc": 0.9787312150001526,
+    "ari": 0.8632383006295918,
+    "perfect_bag_ratio": 0.6438356164383562,
+    "cluster_completeness": 0.9738335179032854,
+    "threshold": 0.9704961776733398
+  },
+  "frame/max@6": {
+    "auroc": 0.9770928621292114,
+    "ari": 0.8644540007334897,
+    "perfect_bag_ratio": 0.547945205479452,
+    "cluster_completeness": 0.9413236246957177,
+    "threshold": 0.974590539932251
+  },
+  "frame/max@8": {
+    "auroc": 0.9754513502120972,
+    "ari": 0.853383504998483,
+    "perfect_bag_ratio": 0.5068493150684932,
+    "cluster_completeness": 0.9417863919026709,
+    "threshold": 0.974356472492218
+  },
+  "frame/patch@12": {
+    "auroc": 0.9017795920372009,
+    "ari": 0.7089113100445634,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7407667139062488,
+    "threshold": 0.9131378531455994
+  },
+  "frame/patch@2": {
+    "auroc": 0.9720892906188965,
+    "ari": 0.8224558763510512,
+    "perfect_bag_ratio": 0.4931506849315068,
+    "cluster_completeness": 0.9385008660590056,
+    "threshold": 0.929341197013855
+  },
+  "frame/patch@3": {
+    "auroc": 0.9728390574455261,
+    "ari": 0.8241595862649642,
+    "perfect_bag_ratio": 0.4657534246575342,
+    "cluster_completeness": 0.9377290280778652,
+    "threshold": 0.9122892618179321
+  },
+  "frame/patch@4": {
+    "auroc": 0.9729996919631958,
+    "ari": 0.8304779825432119,
+    "perfect_bag_ratio": 0.4931506849315068,
+    "cluster_completeness": 0.9419338671664252,
+    "threshold": 0.9112883806228638
+  },
+  "frame/patch@6": {
+    "auroc": 0.9727402925491333,
+    "ari": 0.8171855501363134,
+    "perfect_bag_ratio": 0.4794520547945205,
+    "cluster_completeness": 0.9430616799221451,
+    "threshold": 0.9030329585075378
+  },
+  "frame/patch@8": {
+    "auroc": 0.9720523357391357,
+    "ari": 0.8106130546784288,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9737103594080339,
+    "threshold": 0.870797336101532
+  },
+  "frame/reg@12": {
+    "auroc": 0.8559442758560181,
+    "ari": 0.708238496628609,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7230831184319557,
+    "threshold": 0.9986573457717896
+  },
+  "frame/reg@2": {
+    "auroc": 0.8305370807647705,
+    "ari": 0.6916758239434677,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7200863348537767,
+    "threshold": 0.9999359846115112
+  },
+  "frame/reg@3": {
+    "auroc": 0.8396713137626648,
+    "ari": 0.7147414212589989,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7069643018480228,
+    "threshold": 0.9998231530189514
+  },
+  "frame/reg@4": {
+    "auroc": 0.8447745442390442,
+    "ari": 0.7130225514725879,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7129031433682598,
+    "threshold": 0.9997248649597168
+  },
+  "frame/reg@6": {
+    "auroc": 0.8503870964050293,
+    "ari": 0.7183882954300812,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7449673582231722,
+    "threshold": 0.9994106292724609
+  },
+  "frame/reg@8": {
+    "auroc": 0.8528662323951721,
+    "ari": 0.7251561421993019,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7494144227865158,
+    "threshold": 0.9990803599357605
+  },
+  "global/gem@12": {
+    "auroc": 0.9612448811531067,
+    "ari": 0.795291244405442,
+    "perfect_bag_ratio": 0.273972602739726,
+    "cluster_completeness": 0.7729909496188566,
+    "threshold": 0.9827845692634583
+  },
+  "global/gem@2": {
+    "auroc": 0.9764128923416138,
+    "ari": 0.8335399331032964,
+    "perfect_bag_ratio": 0.5205479452054794,
+    "cluster_completeness": 0.9411918959593377,
+    "threshold": 0.9734556078910828
+  },
+  "global/gem@3": {
+    "auroc": 0.9768555164337158,
+    "ari": 0.8314067006635633,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.943960445239515,
+    "threshold": 0.9731735587120056
+  },
+  "global/gem@4": {
+    "auroc": 0.9767953753471375,
+    "ari": 0.8435819270257046,
+    "perfect_bag_ratio": 0.6164383561643836,
+    "cluster_completeness": 0.9769802677942213,
+    "threshold": 0.9664064049720764
+  },
+  "global/gem@6": {
+    "auroc": 0.9759055972099304,
+    "ari": 0.8214475572495686,
+    "perfect_bag_ratio": 0.5753424657534246,
+    "cluster_completeness": 0.9789675828047922,
+    "threshold": 0.9670202732086182
+  },
+  "global/gem@8": {
+    "auroc": 0.9750779271125793,
+    "ari": 0.8219234557296029,
+    "perfect_bag_ratio": 0.5616438356164384,
+    "cluster_completeness": 0.9702854122621565,
+    "threshold": 0.9684458374977112
+  },
+  "global/max@12": {
+    "auroc": 0.9518498778343201,
+    "ari": 0.8128005640190377,
+    "perfect_bag_ratio": 0.2191780821917808,
+    "cluster_completeness": 0.7619671026647772,
+    "threshold": 0.9780895709991455
+  },
+  "global/max@2": {
+    "auroc": 0.9772723913192749,
+    "ari": 0.8614561190446051,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9427706531194904,
+    "threshold": 0.9743157625198364
+  },
+  "global/max@3": {
+    "auroc": 0.9781368970870972,
+    "ari": 0.8593418227955053,
+    "perfect_bag_ratio": 0.6575342465753424,
+    "cluster_completeness": 0.9772443706164636,
+    "threshold": 0.9698789715766907
+  },
+  "global/max@4": {
+    "auroc": 0.9779708981513977,
+    "ari": 0.8617284684717921,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9420212991143224,
+    "threshold": 0.9745359420776367
+  },
+  "global/max@6": {
+    "auroc": 0.9769198894500732,
+    "ari": 0.8690615429124716,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9413236246957177,
+    "threshold": 0.9744935631752014
+  },
+  "global/max@8": {
+    "auroc": 0.9754563570022583,
+    "ari": 0.856815666859356,
+    "perfect_bag_ratio": 0.6301369863013698,
+    "cluster_completeness": 0.9705975807138598,
+    "threshold": 0.971099317073822
+  },
+  "global/patch@12": {
+    "auroc": 0.9101731181144714,
+    "ari": 0.707850818999173,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7417445345352321,
+    "threshold": 0.9424647092819214
+  },
+  "global/patch@2": {
+    "auroc": 0.9728534817695618,
+    "ari": 0.8258485964955695,
+    "perfect_bag_ratio": 0.4931506849315068,
+    "cluster_completeness": 0.9385008660590056,
+    "threshold": 0.9206380248069763
+  },
+  "global/patch@3": {
+    "auroc": 0.9728390574455261,
+    "ari": 0.8241595862649642,
+    "perfect_bag_ratio": 0.4657534246575342,
+    "cluster_completeness": 0.9377290280778652,
+    "threshold": 0.9122892618179321
+  },
+  "global/patch@4": {
+    "auroc": 0.9729273319244385,
+    "ari": 0.8169480611130635,
+    "perfect_bag_ratio": 0.5342465753424658,
+    "cluster_completeness": 0.9765644820295982,
+    "threshold": 0.8757160902023315
+  },
+  "global/patch@6": {
+    "auroc": 0.9728272557258606,
+    "ari": 0.8212201456413202,
+    "perfect_bag_ratio": 0.4794520547945205,
+    "cluster_completeness": 0.9407360985267963,
+    "threshold": 0.9060142636299133
+  },
+  "global/patch@8": {
+    "auroc": 0.9722330570220947,
+    "ari": 0.8093243571059278,
+    "perfect_bag_ratio": 0.4520547945205479,
+    "cluster_completeness": 0.9357578209903792,
+    "threshold": 0.9036886692047119
+  },
+  "global/reg@12": {
+    "auroc": 0.8561598658561707,
+    "ari": 0.7114496335775533,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7257023338418689,
+    "threshold": 0.9987122416496277
+  },
+  "global/reg@2": {
+    "auroc": 0.8255189061164856,
+    "ari": 0.6698287935257002,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7182590923288598,
+    "threshold": 0.9999460577964783
+  },
+  "global/reg@3": {
+    "auroc": 0.8376371264457703,
+    "ari": 0.6968894623543501,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7031658522356198,
+    "threshold": 0.999858558177948
+  },
+  "global/reg@4": {
+    "auroc": 0.8445435762405396,
+    "ari": 0.7085014292403563,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7126816594258455,
+    "threshold": 0.9997263550758362
+  },
+  "global/reg@6": {
+    "auroc": 0.8505083322525024,
+    "ari": 0.7267640678165213,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7449673582231722,
+    "threshold": 0.9994045495986938
+  },
+  "global/reg@8": {
+    "auroc": 0.8528323769569397,
+    "ari": 0.725367050231188,
+    "perfect_bag_ratio": 0.0,
+    "cluster_completeness": 0.7497722045396464,
+    "threshold": 0.9991044998168945
+  }
+}

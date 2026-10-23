@@ -1,0 +1,38 @@
+# Learned patch matching on frozen VGGT-Omega (scene_router/vggt_match.py). Override any key: key=value
+# uv run python -m scene_router.train --config scene_router/config_vggt_match.yaml epochs=5 wandb=false
+model: vggt_match
+
+# data (made by scene_router/make_bags.py)
+data_dir: scene_router/data
+height: 448            # centre crop to 448 x 336 (3:4, so Stitch_Requests frames lose almost nothing)
+width: 336
+resize: crop           # as in training/evaluate.py, where the training-free version was measured
+workers: 4
+
+# model: everything starts at the best training-free setting (global/match70-c@4)
+vggt_weights: checkpoints/vggt_omega_1b_512.pt
+layer: 4               # VGGT-Omega block whose patches are matched; blocks after it are not loaded
+adapter_rank: 64       # learned residual adapter on every patch token, starts as identity
+patch_threshold: 0.70  # start of the learned patch threshold tau
+temperature: 0.03      # start of the learned softness of the patch threshold
+share_threshold: 0.20  # start of the learned matched-share cutoff
+two_hop: true          # also score A-B through a middle frame K (long requests); its weight starts at 0
+
+# training
+epochs: 10
+epoch_bags: 1000       # train bags drawn per epoch (null: all of train.json)
+bags_per_batch: 4
+lr: 5.0e-4
+weight_decay: 0.05     # adapter only; the four scalars are not decayed
+warmup_steps: 100
+grad_clip: 1.0
+threshold: 0.5         # pair probability at which frames are grouped, for ARI and perfect bag
+seed: 0
+device: auto           # auto | cuda | mps | cpu
+amp: true              # bf16 autocast on cuda for the frozen backbone; matching always runs in float32
+
+# output
+out: outputs/scene_router/vggt_match_block4
+wandb: true
+wandb_project: vggt-omega-multiscene
+wandb_name: vggt_match_block4

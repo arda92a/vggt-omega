@@ -1,6 +1,11 @@
-"""Local Gradio demo: upload frames from any scenes and see how the multi-scene VGGT-Omega groups them.
+"""Local Gradio demo: upload frames from any scenes and see how VGGT-Omega groups them.
 
-    uv run --extra ui python demo_multiscene.py --checkpoint checkpoints/multiscene.pt
+    uv run --extra ui python demo_multiscene.py --checkpoint checkpoints/vggt_omega_1b_512.pt
+
+Methods:
+  Patch matching   no training, best on retail: two frames are one scene when enough of their patches match
+  Patch cosine     no training: cosine of the mean patch token of each frame
+  Learned heads    only with a checkpoint that has multi-scene weights
 """
 
 import argparse
@@ -20,11 +25,13 @@ from PIL import Image, ImageDraw
 
 from vggt_omega.models import VGGTOmega
 from vggt_omega.models.multiscene import scene_groups
+from vggt_omega.utils import baseline
 from vggt_omega.utils.baseline import patch_feature_affinity
 from vggt_omega.utils.load_fn import load_and_preprocess_images
 
 LEARNED = "Learned heads"
 BASELINE = "Baseline: patch cosine (no training)"
+MATCHING = "Patch matching (no training)"
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#16a5a5", "#d4a017", "#f032e6", "#7f7f00", "#808080"]
 IMAGE_TYPES = [".jpg", ".jpeg", ".png", ".webp", ".bmp"]
@@ -76,9 +83,21 @@ def load_model(checkpoint: str, device: torch.device, route_layer: int, threshol
 def group_frames(
     model: VGGTOmega, paths: list[str], resolution: int, threshold: float, linkage: str,
     method: str = LEARNED, baseline_layer: int = 4, baseline_threshold: float = 0.9,
+    match_patch_threshold: float = baseline.MATCH_PATCH_THRESHOLD,
+    match_threshold: float = baseline.MATCH_GROUP_THRESHOLD, match_centered: bool = True,
 ) -> dict:
     """Group frames. `maps` are the (title, matrix in [0, 1]) heatmaps to draw, `group_id` the predicted scenes."""
     device = next(model.parameters()).device
+    if method == MATCHING:
+        # Frames are prepared exactly as in the evaluation (448 x 256 centre crop), so the thresholds carry over.
+        images = baseline.load_frames(paths).to(device)
+        share = baseline.patch_match_affinity(
+            model.aggregator, images, baseline_layer, float(match_patch_threshold), bool(match_centered)
+        )
+        groups = scene_groups(share[None], float(match_threshold), linkage)[0]
+        top = max(float(share[~torch.eye(len(share), dtype=torch.bool)].max()), 1e-6)
+        title = f"matched patch share, block {baseline_layer} (0 to {top:.2f})"
+        return {"group_id": groups, "maps": [(title, (share / top).clamp(0, 1).numpy())]}
     images = load_and_preprocess_images(paths, mode="balanced", image_resolution=resolution).to(device)
     if method == BASELINE:
         affinity = patch_feature_affinity(model.aggregator, images, baseline_layer)
@@ -159,14 +178,17 @@ def affinity_image(result: dict) -> np.ndarray:
     return np.asarray(canvas)
 
 
-def run_bag(model, files, resolution, threshold, linkage, max_images, method, baseline_layer, baseline_threshold):
+def run_bag(model, files, resolution, threshold, linkage, max_images, method, baseline_layer, baseline_threshold,
+            match_patch_threshold=baseline.MATCH_PATCH_THRESHOLD, match_threshold=baseline.MATCH_GROUP_THRESHOLD,
+            match_centered=True):
     paths = [str(f if isinstance(f, (str, Path)) else f.name) for f in (files or [])]
     if len(paths) < 2:
         raise gr.Error("Give at least 2 images.")
     if len(paths) > max_images:
         raise gr.Error(f"{len(paths)} images is more than --max-images {max_images}.")
     started = time.time()
-    result = group_frames(model, paths, int(resolution), threshold, linkage, method, int(baseline_layer), baseline_threshold)
+    result = group_frames(model, paths, int(resolution), threshold, linkage, method, int(baseline_layer),
+                          baseline_threshold, match_patch_threshold, match_threshold, match_centered)
     groups = result["group_id"]
     sizes = sorted((int((groups == g).sum()) for g in groups.unique()), reverse=True)
     summary = f"**{len(paths)} frames grouped into {len(sizes)} scenes** (sizes {sizes}) in {time.time() - started:.1f}s"
@@ -174,9 +196,11 @@ def run_bag(model, files, resolution, threshold, linkage, max_images, method, ba
 
 
 def build_ui(model: VGGTOmega, args) -> gr.Blocks:
-    def group(files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold):
+    def group(files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold,
+              match_patch_threshold, match_threshold, match_centered):
         return run_bag(
-            model, files, resolution, threshold, linkage, args.max_images, method, baseline_layer, baseline_threshold
+            model, files, resolution, threshold, linkage, args.max_images, method, baseline_layer, baseline_threshold,
+            match_patch_threshold, match_threshold, match_centered,
         )
 
     with gr.Blocks(title="Multi-scene VGGT-Omega") as demo:
@@ -185,14 +209,26 @@ def build_ui(model: VGGTOmega, args) -> gr.Blocks:
             f"The model groups them into scenes. Device: `{next(model.parameters()).device}`."
         )
         files = gr.File(file_count="multiple", file_types=IMAGE_TYPES, label="Images (2 or more)")
-        methods = [LEARNED, BASELINE] if model.multiscene is not None else [BASELINE]
+        methods = [MATCHING, BASELINE] + ([LEARNED] if model.multiscene is not None else [])
         method = gr.Radio(methods, value=methods[0], label="Method")
         with gr.Row():
-            resolution = gr.Slider(224, 640, value=args.image_resolution, step=16, label="Image resolution")
+            resolution = gr.Slider(224, 640, value=args.image_resolution, step=16,
+                                   label="Image resolution (not used by patch matching: 448 x 256)")
             threshold = gr.Slider(0.1, 0.9, value=args.threshold, step=0.05, label="Same-scene threshold (learned heads)")
             linkage = gr.Dropdown(["average", "single", "complete"], value=args.linkage, label="Linkage")
         with gr.Row():
-            baseline_layer = gr.Slider(1, 24, value=args.baseline_layer, step=1, label="Baseline: backbone block")
+            match_patch_threshold = gr.Slider(
+                0.3, 0.95, value=baseline.MATCH_PATCH_THRESHOLD, step=0.05,
+                label="Patch matching: patch threshold (a patch counts as matched at this cosine)",
+            )
+            match_threshold = gr.Slider(
+                0.02, 0.6, value=baseline.MATCH_GROUP_THRESHOLD, step=0.01,
+                label="Patch matching: same-scene share (frames join when this share of patches match)",
+            )
+            match_centered = gr.Checkbox(value=True, label="Patch matching: centering")
+        with gr.Row():
+            baseline_layer = gr.Slider(1, 24, value=args.baseline_layer, step=1,
+                                       label="Backbone block (patch matching and patch cosine)")
             baseline_threshold = gr.Slider(
                 0.5, 1.0, value=args.baseline_threshold, step=0.005, label="Baseline: cosine threshold"
             )
@@ -202,7 +238,8 @@ def build_ui(model: VGGTOmega, args) -> gr.Blocks:
         heatmap = gr.Image(label="Affinity, frames sorted by predicted scene")
         button.click(
             group,
-            [files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold],
+            [files, resolution, threshold, linkage, method, baseline_layer, baseline_threshold,
+             match_patch_threshold, match_threshold, match_centered],
             [summary, scenes, heatmap],
         )
     return demo
@@ -210,7 +247,8 @@ def build_ui(model: VGGTOmega, args) -> gr.Blocks:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local multi-scene grouping demo")
-    parser.add_argument("--checkpoint", required=True, help="checkpoint.pt copied from the training server")
+    parser.add_argument("--checkpoint", default="checkpoints/vggt_omega_1b_512.pt",
+                        help="VGGT-Omega weights; a multi-scene training checkpoint also enables the learned heads")
     parser.add_argument("--device", default="auto", help="auto, cuda, mps or cpu")
     parser.add_argument("--image-resolution", type=int, default=416, help="416 matches training")
     parser.add_argument("--route-layer", type=int, default=11, help="must match model.multiscene.route_layer in training")

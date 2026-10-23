@@ -1,0 +1,9 @@
+{
+  "router/best_vitb_max_pooling": {
+    "auroc": 0.9669123291969299,
+    "ari": 0.8259385571368445,
+    "perfect_bag_ratio": 0.4520547945205479,
+    "cluster_completeness": 0.9028427128427128,
+    "threshold": 0.8287537693977356
+  }
+}
